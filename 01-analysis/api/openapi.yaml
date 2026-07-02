@@ -1,0 +1,273 @@
+openapi: 3.0.3
+info:
+  title: Apex Karting Center Client API
+  description: API for the client mobile application of the "Apex" karting center.
+  version: 1.0.0
+
+servers:
+  - url: https://api.apex-karting.com/v1
+
+paths:
+  /slots:
+    get:
+      summary: Get available slots
+      description: Returns a list of available race slots. Default horizon is 7 days if no dates provided.
+      parameters:
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: track_config
+          in: query
+          schema:
+            $ref: '#/components/schemas/TrackConfig'
+      responses:
+        '200':
+          description: A list of slots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Slot'
+
+  /slots/{slotId}:
+    get:
+      summary: Get slot details
+      parameters:
+        - name: slotId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Slot details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Slot'
+        '404':
+          description: Slot not found
+
+  /bookings:
+    post:
+      summary: Create a booking
+      description: Book a slot for the client. Requires gear selection.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - slot_id
+                - gear_type
+              properties:
+                slot_id:
+                  type: string
+                  format: uuid
+                gear_type:
+                  $ref: '#/components/schemas/GearType'
+      responses:
+        '201':
+          description: Booking created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '409':
+          description: Conflict - No available karts left for this slot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Gone - Slot is no longer available (cancelled or removed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /client/bookings:
+    get:
+      summary: Get client's bookings
+      description: Returns a list of bookings for the current authenticated client.
+      responses:
+        '200':
+          description: List of bookings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Booking'
+
+  /client/bookings/{bookingId}/cancel:
+    post:
+      summary: Cancel a booking
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Booking cancelled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '400':
+          description: Cannot cancel (too close to start time)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /client/bookings/{bookingId}/rate:
+    post:
+      summary: Rate marshal
+      description: Leave a rating for the marshal after the race is completed.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - rating
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                comment:
+                  type: string
+      responses:
+        '200':
+          description: Rating saved successfully
+
+  /client/profile:
+    get:
+      summary: Get client profile
+      responses:
+        '200':
+          description: Client profile data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientProfile'
+
+components:
+  schemas:
+    TrackConfig:
+      type: string
+      enum: [SHORT, LONG]
+      
+    GearType:
+      type: string
+      enum: [OWN, RENTAL]
+
+    BookingStatus:
+      type: string
+      enum: [ACTIVE, CANCELLED_BY_CLIENT, CANCELLED_BY_CENTER, COMPLETED]
+
+    SlotStatus:
+      type: string
+      enum: [SCHEDULED, CANCELLED_BY_WEATHER, COMPLETED]
+
+    Marshal:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        avatar_url:
+          type: string
+        rating:
+          type: number
+          format: float
+
+    Slot:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        start_time:
+          type: string
+          format: date-time
+        track_config:
+          $ref: '#/components/schemas/TrackConfig'
+        marshal:
+          $ref: '#/components/schemas/Marshal'
+        available_karts:
+          type: integer
+          description: Number of currently available karts for booking.
+        max_karts:
+          type: integer
+          description: Maximum capacity of the slot.
+        status:
+          $ref: '#/components/schemas/SlotStatus'
+        rental_tariff:
+          type: integer
+          description: Price in RUB for gear rental. (As per R-015)
+        gathering_place:
+          type: string
+          description: Address or specific place to gather.
+
+    Booking:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        slot:
+          $ref: '#/components/schemas/Slot'
+        status:
+          $ref: '#/components/schemas/BookingStatus'
+        gear_type:
+          $ref: '#/components/schemas/GearType'
+        cancellation_reason:
+          type: string
+          description: Present if status is CANCELLED_BY_CENTER.
+
+    ClientProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        phone:
+          type: string
+        is_regular:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
