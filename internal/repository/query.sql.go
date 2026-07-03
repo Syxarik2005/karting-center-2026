@@ -7,9 +7,8 @@ package repository
 
 import (
 	"context"
-	"time"
 
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createBooking = `-- name: CreateBooking :one
@@ -19,15 +18,15 @@ RETURNING id, slot_id, client_id, seats_count, rental_count, status, price_total
 `
 
 type CreateBookingParams struct {
-	SlotID      uuid.UUID `json:"slot_id"`
-	ClientID    uuid.UUID `json:"client_id"`
-	SeatsCount  int32     `json:"seats_count"`
-	RentalCount int32     `json:"rental_count"`
-	PriceTotal  string    `json:"price_total"`
+	SlotID      pgtype.UUID    `json:"slot_id"`
+	ClientID    pgtype.UUID    `json:"client_id"`
+	SeatsCount  int32          `json:"seats_count"`
+	RentalCount int32          `json:"rental_count"`
+	PriceTotal  pgtype.Numeric `json:"price_total"`
 }
 
 func (q *Queries) CreateBooking(ctx context.Context, arg CreateBookingParams) (Booking, error) {
-	row := q.db.QueryRowContext(ctx, createBooking,
+	row := q.db.QueryRow(ctx, createBooking,
 		arg.SlotID,
 		arg.ClientID,
 		arg.SeatsCount,
@@ -61,7 +60,7 @@ type CreateClientParams struct {
 }
 
 func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) (Client, error) {
-	row := q.db.QueryRowContext(ctx, createClient, arg.Name, arg.Phone)
+	row := q.db.QueryRow(ctx, createClient, arg.Name, arg.Phone)
 	var i Client
 	err := row.Scan(
 		&i.ID,
@@ -72,13 +71,45 @@ func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) (Cli
 	return i, err
 }
 
+const createRating = `-- name: CreateRating :one
+INSERT INTO ratings (booking_id, instructor_id, rating, comment)
+VALUES ($1, $2, $3, $4)
+RETURNING id, booking_id, instructor_id, rating, comment, created_at
+`
+
+type CreateRatingParams struct {
+	BookingID    pgtype.UUID `json:"booking_id"`
+	InstructorID pgtype.UUID `json:"instructor_id"`
+	Rating       int32       `json:"rating"`
+	Comment      pgtype.Text `json:"comment"`
+}
+
+func (q *Queries) CreateRating(ctx context.Context, arg CreateRatingParams) (Rating, error) {
+	row := q.db.QueryRow(ctx, createRating,
+		arg.BookingID,
+		arg.InstructorID,
+		arg.Rating,
+		arg.Comment,
+	)
+	var i Rating
+	err := row.Scan(
+		&i.ID,
+		&i.BookingID,
+		&i.InstructorID,
+		&i.Rating,
+		&i.Comment,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getBookingByID = `-- name: GetBookingByID :one
 SELECT id, slot_id, client_id, seats_count, rental_count, status, price_total, created_at, cancelled_at FROM bookings
 WHERE id = $1 LIMIT 1
 `
 
-func (q *Queries) GetBookingByID(ctx context.Context, id uuid.UUID) (Booking, error) {
-	row := q.db.QueryRowContext(ctx, getBookingByID, id)
+func (q *Queries) GetBookingByID(ctx context.Context, id pgtype.UUID) (Booking, error) {
+	row := q.db.QueryRow(ctx, getBookingByID, id)
 	var i Booking
 	err := row.Scan(
 		&i.ID,
@@ -99,8 +130,8 @@ SELECT id, name, phone, created_at FROM clients
 WHERE id = $1 LIMIT 1
 `
 
-func (q *Queries) GetClientByID(ctx context.Context, id uuid.UUID) (Client, error) {
-	row := q.db.QueryRowContext(ctx, getClientByID, id)
+func (q *Queries) GetClientByID(ctx context.Context, id pgtype.UUID) (Client, error) {
+	row := q.db.QueryRow(ctx, getClientByID, id)
 	var i Client
 	err := row.Scan(
 		&i.ID,
@@ -117,7 +148,7 @@ WHERE phone = $1 LIMIT 1
 `
 
 func (q *Queries) GetClientByPhone(ctx context.Context, phone string) (Client, error) {
-	row := q.db.QueryRowContext(ctx, getClientByPhone, phone)
+	row := q.db.QueryRow(ctx, getClientByPhone, phone)
 	var i Client
 	err := row.Scan(
 		&i.ID,
@@ -129,9 +160,9 @@ func (q *Queries) GetClientByPhone(ctx context.Context, phone string) (Client, e
 }
 
 const getSlotByID = `-- name: GetSlotByID :one
-SELECT s.id, s.start_at, s.total_seats, s.free_seats, s.free_rental_boards, s.price, s.rental_price,
+SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
        s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
-       r.id as route_id, r.name as route_name, r.type as route_type, r.duration_min as route_duration, r.geometry as route_geometry,
+       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
        i.id as instructor_id, i.name as instructor_name
 FROM slots s
 JOIN routes r ON s.route_id = r.id
@@ -140,45 +171,47 @@ WHERE s.id = $1 LIMIT 1
 `
 
 type GetSlotByIDRow struct {
-	ID               uuid.UUID  `json:"id"`
-	StartAt          time.Time  `json:"start_at"`
-	TotalSeats       int32      `json:"total_seats"`
-	FreeSeats        int32      `json:"free_seats"`
-	FreeRentalBoards int32      `json:"free_rental_boards"`
-	Price            string     `json:"price"`
-	RentalPrice      string     `json:"rental_price"`
-	MeetingPoint     string     `json:"meeting_point"`
-	MeetingPointLat  float64    `json:"meeting_point_lat"`
-	MeetingPointLng  float64    `json:"meeting_point_lng"`
-	Status           SlotStatus `json:"status"`
-	RouteID          uuid.UUID  `json:"route_id"`
-	RouteName        string     `json:"route_name"`
-	RouteType        RouteType  `json:"route_type"`
-	RouteDuration    int32      `json:"route_duration"`
-	RouteGeometry    string     `json:"route_geometry"`
-	InstructorID     uuid.UUID  `json:"instructor_id"`
-	InstructorName   string     `json:"instructor_name"`
+	ID               pgtype.UUID        `json:"id"`
+	StartAt          pgtype.Timestamptz `json:"start_at"`
+	MaxSeats         int32              `json:"max_seats"`
+	BookedSeats      int32              `json:"booked_seats"`
+	FreeRentalBoards int32              `json:"free_rental_boards"`
+	PricePerSeat     pgtype.Numeric     `json:"price_per_seat"`
+	PriceRental      pgtype.Numeric     `json:"price_rental"`
+	MeetingPoint     string             `json:"meeting_point"`
+	MeetingPointLat  float64            `json:"meeting_point_lat"`
+	MeetingPointLng  float64            `json:"meeting_point_lng"`
+	Status           SlotStatus         `json:"status"`
+	RouteID          pgtype.UUID        `json:"route_id"`
+	RouteName        string             `json:"route_name"`
+	RouteDescription pgtype.Text        `json:"route_description"`
+	RouteType        RouteType          `json:"route_type"`
+	DurationMinutes  int32              `json:"duration_minutes"`
+	RouteGeometry    string             `json:"route_geometry"`
+	InstructorID     pgtype.UUID        `json:"instructor_id"`
+	InstructorName   string             `json:"instructor_name"`
 }
 
-func (q *Queries) GetSlotByID(ctx context.Context, id uuid.UUID) (GetSlotByIDRow, error) {
-	row := q.db.QueryRowContext(ctx, getSlotByID, id)
+func (q *Queries) GetSlotByID(ctx context.Context, id pgtype.UUID) (GetSlotByIDRow, error) {
+	row := q.db.QueryRow(ctx, getSlotByID, id)
 	var i GetSlotByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.StartAt,
-		&i.TotalSeats,
-		&i.FreeSeats,
+		&i.MaxSeats,
+		&i.BookedSeats,
 		&i.FreeRentalBoards,
-		&i.Price,
-		&i.RentalPrice,
+		&i.PricePerSeat,
+		&i.PriceRental,
 		&i.MeetingPoint,
 		&i.MeetingPointLat,
 		&i.MeetingPointLng,
 		&i.Status,
 		&i.RouteID,
 		&i.RouteName,
+		&i.RouteDescription,
 		&i.RouteType,
-		&i.RouteDuration,
+		&i.DurationMinutes,
 		&i.RouteGeometry,
 		&i.InstructorID,
 		&i.InstructorName,
@@ -195,13 +228,13 @@ LIMIT $2 OFFSET $3
 `
 
 type ListBookingsByClientParams struct {
-	ClientID uuid.UUID `json:"client_id"`
-	Limit    int32     `json:"limit"`
-	Offset   int32     `json:"offset"`
+	ClientID pgtype.UUID `json:"client_id"`
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
 }
 
 func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByClientParams) ([]Booking, error) {
-	rows, err := q.db.QueryContext(ctx, listBookingsByClient, arg.ClientID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listBookingsByClient, arg.ClientID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -224,9 +257,6 @@ func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByCl
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -234,9 +264,9 @@ func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByCl
 }
 
 const listSlots = `-- name: ListSlots :many
-SELECT s.id, s.start_at, s.total_seats, s.free_seats, s.free_rental_boards, s.price, s.rental_price,
+SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
        s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
-       r.id as route_id, r.name as route_name, r.type as route_type, r.duration_min as route_duration, r.geometry as route_geometry,
+       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
        i.id as instructor_id, i.name as instructor_name
 FROM slots s
 JOIN routes r ON s.route_id = r.id
@@ -247,35 +277,36 @@ LIMIT $3 OFFSET $4
 `
 
 type ListSlotsParams struct {
-	StartAt   time.Time `json:"start_at"`
-	StartAt_2 time.Time `json:"start_at_2"`
-	Limit     int32     `json:"limit"`
-	Offset    int32     `json:"offset"`
+	StartAt   pgtype.Timestamptz `json:"start_at"`
+	StartAt_2 pgtype.Timestamptz `json:"start_at_2"`
+	Limit     int32              `json:"limit"`
+	Offset    int32              `json:"offset"`
 }
 
 type ListSlotsRow struct {
-	ID               uuid.UUID  `json:"id"`
-	StartAt          time.Time  `json:"start_at"`
-	TotalSeats       int32      `json:"total_seats"`
-	FreeSeats        int32      `json:"free_seats"`
-	FreeRentalBoards int32      `json:"free_rental_boards"`
-	Price            string     `json:"price"`
-	RentalPrice      string     `json:"rental_price"`
-	MeetingPoint     string     `json:"meeting_point"`
-	MeetingPointLat  float64    `json:"meeting_point_lat"`
-	MeetingPointLng  float64    `json:"meeting_point_lng"`
-	Status           SlotStatus `json:"status"`
-	RouteID          uuid.UUID  `json:"route_id"`
-	RouteName        string     `json:"route_name"`
-	RouteType        RouteType  `json:"route_type"`
-	RouteDuration    int32      `json:"route_duration"`
-	RouteGeometry    string     `json:"route_geometry"`
-	InstructorID     uuid.UUID  `json:"instructor_id"`
-	InstructorName   string     `json:"instructor_name"`
+	ID               pgtype.UUID        `json:"id"`
+	StartAt          pgtype.Timestamptz `json:"start_at"`
+	MaxSeats         int32              `json:"max_seats"`
+	BookedSeats      int32              `json:"booked_seats"`
+	FreeRentalBoards int32              `json:"free_rental_boards"`
+	PricePerSeat     pgtype.Numeric     `json:"price_per_seat"`
+	PriceRental      pgtype.Numeric     `json:"price_rental"`
+	MeetingPoint     string             `json:"meeting_point"`
+	MeetingPointLat  float64            `json:"meeting_point_lat"`
+	MeetingPointLng  float64            `json:"meeting_point_lng"`
+	Status           SlotStatus         `json:"status"`
+	RouteID          pgtype.UUID        `json:"route_id"`
+	RouteName        string             `json:"route_name"`
+	RouteDescription pgtype.Text        `json:"route_description"`
+	RouteType        RouteType          `json:"route_type"`
+	DurationMinutes  int32              `json:"duration_minutes"`
+	RouteGeometry    string             `json:"route_geometry"`
+	InstructorID     pgtype.UUID        `json:"instructor_id"`
+	InstructorName   string             `json:"instructor_name"`
 }
 
 func (q *Queries) ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlotsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listSlots,
+	rows, err := q.db.Query(ctx, listSlots,
 		arg.StartAt,
 		arg.StartAt_2,
 		arg.Limit,
@@ -291,19 +322,20 @@ func (q *Queries) ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlo
 		if err := rows.Scan(
 			&i.ID,
 			&i.StartAt,
-			&i.TotalSeats,
-			&i.FreeSeats,
+			&i.MaxSeats,
+			&i.BookedSeats,
 			&i.FreeRentalBoards,
-			&i.Price,
-			&i.RentalPrice,
+			&i.PricePerSeat,
+			&i.PriceRental,
 			&i.MeetingPoint,
 			&i.MeetingPointLat,
 			&i.MeetingPointLng,
 			&i.Status,
 			&i.RouteID,
 			&i.RouteName,
+			&i.RouteDescription,
 			&i.RouteType,
-			&i.RouteDuration,
+			&i.DurationMinutes,
 			&i.RouteGeometry,
 			&i.InstructorID,
 			&i.InstructorName,
@@ -311,9 +343,6 @@ func (q *Queries) ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlo
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -329,12 +358,12 @@ RETURNING id, slot_id, client_id, seats_count, rental_count, status, price_total
 `
 
 type UpdateBookingStatusParams struct {
-	ID     uuid.UUID     `json:"id"`
+	ID     pgtype.UUID   `json:"id"`
 	Status BookingStatus `json:"status"`
 }
 
 func (q *Queries) UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) (Booking, error) {
-	row := q.db.QueryRowContext(ctx, updateBookingStatus, arg.ID, arg.Status)
+	row := q.db.QueryRow(ctx, updateBookingStatus, arg.ID, arg.Status)
 	var i Booking
 	err := row.Scan(
 		&i.ID,

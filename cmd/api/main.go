@@ -9,10 +9,14 @@ import (
 	"syscall"
 	"time"
 
+	"volna-backend/internal/api"
 	"volna-backend/internal/config"
+	"volna-backend/internal/repository"
+	"volna-backend/pkg/auth"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -29,6 +33,7 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(corsMiddleware)
 
 	// Healthcheck
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -36,8 +41,19 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	// Add routes here later when we generate oapi-codegen server
-	// ...
+	// Connect to Database
+	dbpool, err := pgxpool.New(context.Background(), cfg.Database.URL)
+	if err != nil {
+		logger.Error("Unable to connect to database", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer dbpool.Close()
+
+	repo := repository.New(dbpool)
+	jwtManager := auth.NewJWTManager(cfg.Auth.JWTSecret)
+
+	apiServer := api.NewServer(repo, jwtManager)
+	apiServer.Mount(r)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,
@@ -66,4 +82,17 @@ func main() {
 	}
 
 	logger.Info("Server exiting")
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

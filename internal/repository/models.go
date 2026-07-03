@@ -5,12 +5,10 @@
 package repository
 
 import (
-	"database/sql"
 	"database/sql/driver"
 	"fmt"
-	"time"
 
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type BookingStatus string
@@ -142,51 +140,61 @@ func (ns NullSlotStatus) Value() (driver.Value, error) {
 }
 
 type Booking struct {
-	ID          uuid.UUID     `json:"id"`
-	SlotID      uuid.UUID     `json:"slot_id"`
-	ClientID    uuid.UUID     `json:"client_id"`
-	SeatsCount  int32         `json:"seats_count"`
-	RentalCount int32         `json:"rental_count"`
-	Status      BookingStatus `json:"status"`
-	PriceTotal  string        `json:"price_total"`
-	CreatedAt   time.Time     `json:"created_at"`
-	CancelledAt sql.NullTime  `json:"cancelled_at"`
+	ID          pgtype.UUID        `json:"id"`
+	SlotID      pgtype.UUID        `json:"slot_id"`
+	ClientID    pgtype.UUID        `json:"client_id"`
+	SeatsCount  int32              `json:"seats_count"`
+	RentalCount int32              `json:"rental_count"`
+	Status      BookingStatus      `json:"status"`
+	PriceTotal  pgtype.Numeric     `json:"price_total"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	CancelledAt pgtype.Timestamptz `json:"cancelled_at"`
 }
 
 type Client struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Phone     string    `json:"phone"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
+	Phone     string             `json:"phone"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Instructor struct {
-	ID   uuid.UUID `json:"id"`
-	Name string    `json:"name"`
+	ID     pgtype.UUID    `json:"id"`
+	Name   string         `json:"name"`
+	Rating pgtype.Numeric `json:"rating"`
+}
+
+type Rating struct {
+	ID           pgtype.UUID        `json:"id"`
+	BookingID    pgtype.UUID        `json:"booking_id"`
+	InstructorID pgtype.UUID        `json:"instructor_id"`
+	Rating       int32              `json:"rating"`
+	Comment      pgtype.Text        `json:"comment"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type Route struct {
-	ID          uuid.UUID      `json:"id"`
-	Name        string         `json:"name"`
-	Description sql.NullString `json:"description"`
-	Type        RouteType      `json:"type"`
-	CapacityCap int32          `json:"capacity_cap"`
-	DurationMin int32          `json:"duration_min"`
-	Geometry    string         `json:"geometry"`
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	Description pgtype.Text `json:"description"`
+	Type        RouteType   `json:"type"`
+	CapacityCap int32       `json:"capacity_cap"`
+	DurationMin int32       `json:"duration_min"`
+	Geometry    string      `json:"geometry"`
 }
 
 type Slot struct {
-	ID               uuid.UUID  `json:"id"`
-	RouteID          uuid.UUID  `json:"route_id"`
-	InstructorID     uuid.UUID  `json:"instructor_id"`
-	StartAt          time.Time  `json:"start_at"`
-	TotalSeats       int32      `json:"total_seats"`
-	FreeSeats        int32      `json:"free_seats"`
-	FreeRentalBoards int32      `json:"free_rental_boards"`
-	Price            string     `json:"price"`
-	RentalPrice      string     `json:"rental_price"`
-	MeetingPoint     string     `json:"meeting_point"`
-	MeetingPointLat  float64    `json:"meeting_point_lat"`
-	MeetingPointLng  float64    `json:"meeting_point_lng"`
-	Status           SlotStatus `json:"status"`
+	ID               pgtype.UUID        `json:"id"`
+	RouteID          pgtype.UUID        `json:"route_id"`
+	InstructorID     pgtype.UUID        `json:"instructor_id"`
+	StartAt          pgtype.Timestamptz `json:"start_at"`
+	TotalSeats       int32              `json:"total_seats"`
+	FreeSeats        int32              `json:"free_seats"`
+	FreeRentalBoards int32              `json:"free_rental_boards"`
+	Price            pgtype.Numeric     `json:"price"`
+	RentalPrice      pgtype.Numeric     `json:"rental_price"`
+	MeetingPoint     string             `json:"meeting_point"`
+	MeetingPointLat  float64            `json:"meeting_point_lat"`
+	MeetingPointLng  float64            `json:"meeting_point_lng"`
+	Status           SlotStatus         `json:"status"`
 }

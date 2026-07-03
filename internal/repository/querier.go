@@ -7,16 +7,17 @@ package repository
 import (
 	"context"
 
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
 	CreateBooking(ctx context.Context, arg CreateBookingParams) (Booking, error)
 	CreateClient(ctx context.Context, arg CreateClientParams) (Client, error)
-	GetBookingByID(ctx context.Context, id uuid.UUID) (Booking, error)
-	GetClientByID(ctx context.Context, id uuid.UUID) (Client, error)
+	CreateRating(ctx context.Context, arg CreateRatingParams) (Rating, error)
+	GetBookingByID(ctx context.Context, id pgtype.UUID) (Booking, error)
+	GetClientByID(ctx context.Context, id pgtype.UUID) (Client, error)
 	GetClientByPhone(ctx context.Context, phone string) (Client, error)
-	GetSlotByID(ctx context.Context, id uuid.UUID) (GetSlotByIDRow, error)
+	GetSlotByID(ctx context.Context, id pgtype.UUID) (GetSlotByIDRow, error)
 	ListBookingsByClient(ctx context.Context, arg ListBookingsByClientParams) ([]Booking, error)
 	ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlotsRow, error)
 	UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) (Booking, error)

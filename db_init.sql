@@ -36,8 +36,10 @@ CREATE TABLE routes (
 -- 4. Table: instructors
 CREATE TABLE instructors (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL
+    name VARCHAR(255) NOT NULL,
+    rating NUMERIC(3, 2) NOT NULL DEFAULT 5.00
 );
+
 
 -- 5. Table: slots
 CREATE TABLE slots (
@@ -82,6 +84,17 @@ CREATE TABLE bookings (
     -- Rental boards cannot exceed the number of booked seats
     CONSTRAINT chk_rental_boards_limit CHECK (rental_count >= 0 AND rental_count <= seats_count)
 );
+
+-- 6b. Table: ratings
+CREATE TABLE ratings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    booking_id UUID UNIQUE NOT NULL REFERENCES bookings(id) ON DELETE RESTRICT,
+    instructor_id UUID NOT NULL REFERENCES instructors(id) ON DELETE RESTRICT,
+    rating INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
+    comment TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 
 -- 7. Triggers to enforce complex domain invariants
 
@@ -151,7 +164,50 @@ CREATE TRIGGER trg_update_slot_on_booking
 AFTER INSERT OR UPDATE OF status ON bookings
 FOR EACH ROW EXECUTE FUNCTION update_slot_on_booking();
 
+-- C: Auto-update average rating on Instructor when a new rating is inserted
+CREATE OR REPLACE FUNCTION update_instructor_rating()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE instructors
+    SET rating = (
+        SELECT COALESCE(AVG(rating), 5.00)::NUMERIC(3,2)
+        FROM ratings
+        WHERE instructor_id = NEW.instructor_id
+    )
+    WHERE id = NEW.instructor_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_update_instructor_rating
+AFTER INSERT ON ratings
+FOR EACH ROW EXECUTE FUNCTION update_instructor_rating();
+
 -- 8. Recommended Indexes for performance (Mobile App usage patterns)
 CREATE INDEX idx_slots_start_at ON slots(start_at) WHERE status = 'scheduled';
 CREATE INDEX idx_bookings_client_id ON bookings(client_id);
 CREATE INDEX idx_bookings_slot_id ON bookings(slot_id);
+
+-- 9. Seed Mock Data
+-- Seed Routes
+INSERT INTO routes (id, name, description, type, capacity_cap, duration_min, geometry) VALUES
+('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Озеро Кабан (Новичок)', 'Увлекательная прогулка по озеру Кабан для начинающих.', 'novice', 8, 60, 'encoded_geom_novice'),
+('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', 'Голубые Озера (Профи)', 'Маршрут повышенной сложности для опытных сапбордистов.', 'experienced', 12, 90, 'encoded_geom_exp')
+ON CONFLICT (id) DO NOTHING;
+
+-- Seed Instructors
+INSERT INTO instructors (id, name) VALUES
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', 'Алексей'),
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22', 'Данил'),
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b33', 'Ирина')
+ON CONFLICT (id) DO NOTHING;
+
+-- Seed Slots (using dynamic dates so they are always in the upcoming week)
+INSERT INTO slots (id, route_id, instructor_id, start_at, total_seats, free_seats, free_rental_boards, price, rental_price, meeting_point, meeting_point_lat, meeting_point_lng, status) VALUES
+('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', NOW() + INTERVAL '1 day', 8, 8, 8, 1500.00, 500.00, 'Набережная озера Кабан', 55.7724, 49.1234, 'scheduled'),
+('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c22', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22', NOW() + INTERVAL '2 days', 6, 6, 6, 1500.00, 500.00, 'Набережная озера Кабан', 55.7724, 49.1234, 'scheduled'),
+('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c33', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b33', NOW() + INTERVAL '3 days', 10, 10, 10, 2500.00, 700.00, 'Вход на Голубые Озера', 55.9012, 49.1567, 'scheduled'),
+('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c44', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', NOW() + INTERVAL '4 days', 12, 12, 12, 2500.00, 700.00, 'Вход на Голубые Озера', 55.9012, 49.1567, 'scheduled'),
+('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c55', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22', NOW() + INTERVAL '5 days', 8, 8, 8, 1800.00, 500.00, 'Набережная озера Кабан', 55.7724, 49.1234, 'scheduled')
+ON CONFLICT (id) DO NOTHING;
+
