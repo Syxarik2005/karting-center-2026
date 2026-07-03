@@ -1,0 +1,35 @@
+# Build artifacts
+bin/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Node / npm (used for redocly only)
+node_modules/
+package-lock.json
+package.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated bundle (can be regenerated)
+bundled-api.yaml
+
+# Flutter (if building from this directory)
+mobile_app/.dart_tool/
+mobile_app/.packages
+mobile_app/build/
