@@ -1,5 +1,5 @@
-name: volna_mobile
-description: "Volna SUP-Boarding Booking App"
+name: apex_mobile
+description: "Apex Karting Center Booking App"
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -39,7 +39,7 @@ dev_dependencies:
   flutter_lints: ^3.0.0
   build_runner: ^2.4.9
   freezed: ^2.5.2
-  json_serializable: ^8.1.0
+  json_serializable: ^6.9.4
 
 flutter:
   uses-material-design: true

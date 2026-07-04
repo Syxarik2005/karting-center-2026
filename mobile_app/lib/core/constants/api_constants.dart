@@ -1,4 +1,4 @@
-/// API endpoint constants for the Volna backend.
+/// API endpoint constants for the Apex backend.
 class ApiConstants {
   ApiConstants._();
 
@@ -14,9 +14,11 @@ class ApiConstants {
   static const String slots = '/slots';
   static String slotById(String id) => '/slots/$id';
 
-  // ── Bookings ──
-  static const String bookings = '/bookings';
-  static String cancelBooking(String id) => '/bookings/$id/cancel';
+  // ── Bookings (client-scoped, matches 01-analysis/api/openapi.yaml) ──
+  static const String bookings = '/client/bookings';
+  static String cancelBooking(String id) => '/client/bookings/$id/cancel';
+  static String rateBooking(String id) => '/client/bookings/$id/rate';
+  static const String profile = '/client/profile';
 
   // ── Health ──
   static const String health = '/health';

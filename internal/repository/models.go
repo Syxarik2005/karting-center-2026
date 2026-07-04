@@ -14,10 +14,10 @@ import (
 type BookingStatus string
 
 const (
-	BookingStatusActive        BookingStatus = "active"
-	BookingStatusCancelled     BookingStatus = "cancelled"
-	BookingStatusLateCancel    BookingStatus = "late_cancel"
-	BookingStatusClubCancelled BookingStatus = "club_cancelled"
+	BookingStatusActive             BookingStatus = "ACTIVE"
+	BookingStatusCancelledByClient  BookingStatus = "CANCELLED_BY_CLIENT"
+	BookingStatusCancelledByCenter  BookingStatus = "CANCELLED_BY_CENTER"
+	BookingStatusCompleted          BookingStatus = "COMPLETED"
 )
 
 func (e *BookingStatus) Scan(src interface{}) error {
@@ -34,10 +34,9 @@ func (e *BookingStatus) Scan(src interface{}) error {
 
 type NullBookingStatus struct {
 	BookingStatus BookingStatus `json:"booking_status"`
-	Valid         bool          `json:"valid"` // Valid is true if BookingStatus is not NULL
+	Valid         bool          `json:"valid"`
 }
 
-// Scan implements the Scanner interface.
 func (ns *NullBookingStatus) Scan(value interface{}) error {
 	if value == nil {
 		ns.BookingStatus, ns.Valid = "", false
@@ -47,7 +46,6 @@ func (ns *NullBookingStatus) Scan(value interface{}) error {
 	return ns.BookingStatus.Scan(value)
 }
 
-// Value implements the driver Valuer interface.
 func (ns NullBookingStatus) Value() (driver.Value, error) {
 	if !ns.Valid {
 		return nil, nil
@@ -55,53 +53,50 @@ func (ns NullBookingStatus) Value() (driver.Value, error) {
 	return string(ns.BookingStatus), nil
 }
 
-type RouteType string
+type GearType string
 
 const (
-	RouteTypeNovice      RouteType = "novice"
-	RouteTypeExperienced RouteType = "experienced"
+	GearTypeOwn    GearType = "OWN"
+	GearTypeRental GearType = "RENTAL"
 )
 
-func (e *RouteType) Scan(src interface{}) error {
+func (e *GearType) Scan(src interface{}) error {
 	switch s := src.(type) {
 	case []byte:
-		*e = RouteType(s)
+		*e = GearType(s)
 	case string:
-		*e = RouteType(s)
+		*e = GearType(s)
 	default:
-		return fmt.Errorf("unsupported scan type for RouteType: %T", src)
+		return fmt.Errorf("unsupported scan type for GearType: %T", src)
 	}
 	return nil
 }
 
-type NullRouteType struct {
-	RouteType RouteType `json:"route_type"`
-	Valid     bool      `json:"valid"` // Valid is true if RouteType is not NULL
-}
+type TrackConfig string
 
-// Scan implements the Scanner interface.
-func (ns *NullRouteType) Scan(value interface{}) error {
-	if value == nil {
-		ns.RouteType, ns.Valid = "", false
-		return nil
-	}
-	ns.Valid = true
-	return ns.RouteType.Scan(value)
-}
+const (
+	TrackConfigShort TrackConfig = "SHORT"
+	TrackConfigLong  TrackConfig = "LONG"
+)
 
-// Value implements the driver Valuer interface.
-func (ns NullRouteType) Value() (driver.Value, error) {
-	if !ns.Valid {
-		return nil, nil
+func (e *TrackConfig) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrackConfig(s)
+	case string:
+		*e = TrackConfig(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrackConfig: %T", src)
 	}
-	return string(ns.RouteType), nil
+	return nil
 }
 
 type SlotStatus string
 
 const (
-	SlotStatusScheduled SlotStatus = "scheduled"
-	SlotStatusCancelled SlotStatus = "cancelled"
+	SlotStatusScheduled          SlotStatus = "SCHEDULED"
+	SlotStatusCancelledByWeather SlotStatus = "CANCELLED_BY_WEATHER"
+	SlotStatusCompleted          SlotStatus = "COMPLETED"
 )
 
 func (e *SlotStatus) Scan(src interface{}) error {
@@ -116,85 +111,49 @@ func (e *SlotStatus) Scan(src interface{}) error {
 	return nil
 }
 
-type NullSlotStatus struct {
-	SlotStatus SlotStatus `json:"slot_status"`
-	Valid      bool       `json:"valid"` // Valid is true if SlotStatus is not NULL
-}
-
-// Scan implements the Scanner interface.
-func (ns *NullSlotStatus) Scan(value interface{}) error {
-	if value == nil {
-		ns.SlotStatus, ns.Valid = "", false
-		return nil
-	}
-	ns.Valid = true
-	return ns.SlotStatus.Scan(value)
-}
-
-// Value implements the driver Valuer interface.
-func (ns NullSlotStatus) Value() (driver.Value, error) {
-	if !ns.Valid {
-		return nil, nil
-	}
-	return string(ns.SlotStatus), nil
-}
-
 type Booking struct {
-	ID          pgtype.UUID        `json:"id"`
-	SlotID      pgtype.UUID        `json:"slot_id"`
-	ClientID    pgtype.UUID        `json:"client_id"`
-	SeatsCount  int32              `json:"seats_count"`
-	RentalCount int32              `json:"rental_count"`
-	Status      BookingStatus      `json:"status"`
-	PriceTotal  pgtype.Numeric     `json:"price_total"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	CancelledAt pgtype.Timestamptz `json:"cancelled_at"`
+	ID                  pgtype.UUID        `json:"id"`
+	SlotID              pgtype.UUID        `json:"slot_id"`
+	ClientID            pgtype.UUID        `json:"client_id"`
+	GearType            GearType           `json:"gear_type"`
+	Status              BookingStatus      `json:"status"`
+	CancellationReason  pgtype.Text        `json:"cancellation_reason"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
 }
 
 type Client struct {
 	ID        pgtype.UUID        `json:"id"`
 	Name      string             `json:"name"`
 	Phone     string             `json:"phone"`
+	IsRegular bool               `json:"is_regular"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
-type Instructor struct {
-	ID     pgtype.UUID    `json:"id"`
-	Name   string         `json:"name"`
-	Rating pgtype.Numeric `json:"rating"`
+type Marshal struct {
+	ID        pgtype.UUID    `json:"id"`
+	Name      string         `json:"name"`
+	AvatarUrl string         `json:"avatar_url"`
+	Rating    pgtype.Numeric `json:"rating"`
 }
 
 type Rating struct {
-	ID           pgtype.UUID        `json:"id"`
-	BookingID    pgtype.UUID        `json:"booking_id"`
-	InstructorID pgtype.UUID        `json:"instructor_id"`
-	Rating       int32              `json:"rating"`
-	Comment      pgtype.Text        `json:"comment"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-}
-
-type Route struct {
-	ID          pgtype.UUID `json:"id"`
-	Name        string      `json:"name"`
-	Description pgtype.Text `json:"description"`
-	Type        RouteType   `json:"type"`
-	CapacityCap int32       `json:"capacity_cap"`
-	DurationMin int32       `json:"duration_min"`
-	Geometry    string      `json:"geometry"`
+	ID        pgtype.UUID        `json:"id"`
+	BookingID pgtype.UUID        `json:"booking_id"`
+	MarshalID pgtype.UUID        `json:"marshal_id"`
+	Rating    int32              `json:"rating"`
+	Comment   pgtype.Text        `json:"comment"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Slot struct {
-	ID               pgtype.UUID        `json:"id"`
-	RouteID          pgtype.UUID        `json:"route_id"`
-	InstructorID     pgtype.UUID        `json:"instructor_id"`
-	StartAt          pgtype.Timestamptz `json:"start_at"`
-	TotalSeats       int32              `json:"total_seats"`
-	FreeSeats        int32              `json:"free_seats"`
-	FreeRentalBoards int32              `json:"free_rental_boards"`
-	Price            pgtype.Numeric     `json:"price"`
-	RentalPrice      pgtype.Numeric     `json:"rental_price"`
-	MeetingPoint     string             `json:"meeting_point"`
-	MeetingPointLat  float64            `json:"meeting_point_lat"`
-	MeetingPointLng  float64            `json:"meeting_point_lng"`
-	Status           SlotStatus         `json:"status"`
+	ID              pgtype.UUID    `json:"id"`
+	MarshalID       pgtype.UUID    `json:"marshal_id"`
+	StartTime       pgtype.Timestamptz `json:"start_time"`
+	TrackConfig     TrackConfig    `json:"track_config"`
+	MaxKarts        int32          `json:"max_karts"`
+	AvailableKarts  int32          `json:"available_karts"`
+	RentalTariff    int32          `json:"rental_tariff"`
+	GatheringPlace  string         `json:"gathering_place"`
+	Status          SlotStatus     `json:"status"`
 }

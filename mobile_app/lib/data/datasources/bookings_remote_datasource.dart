@@ -9,7 +9,7 @@ class BookingsRemoteDatasource {
 
   BookingsRemoteDatasource(this._dio);
 
-  /// POST /bookings — создать бронирование.
+  /// POST /client/bookings — создать бронирование.
   Future<BookingModel> createBooking(CreateBookingRequest request) async {
     final response = await _dio.post(
       ApiConstants.bookings,
@@ -18,7 +18,7 @@ class BookingsRemoteDatasource {
     return BookingModel.fromJson(response.data as Map<String, dynamic>);
   }
 
-  /// GET /bookings — список бронирований текущего клиента.
+  /// GET /client/bookings — список бронирований текущего клиента.
   Future<List<BookingModel>> getBookings({
     int limit = 50,
     int offset = 0,

@@ -11,47 +11,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createBooking = `-- name: CreateBooking :one
-INSERT INTO bookings (slot_id, client_id, seats_count, rental_count, price_total)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, slot_id, client_id, seats_count, rental_count, status, price_total, created_at, cancelled_at
-`
-
-type CreateBookingParams struct {
-	SlotID      pgtype.UUID    `json:"slot_id"`
-	ClientID    pgtype.UUID    `json:"client_id"`
-	SeatsCount  int32          `json:"seats_count"`
-	RentalCount int32          `json:"rental_count"`
-	PriceTotal  pgtype.Numeric `json:"price_total"`
-}
-
-func (q *Queries) CreateBooking(ctx context.Context, arg CreateBookingParams) (Booking, error) {
-	row := q.db.QueryRow(ctx, createBooking,
-		arg.SlotID,
-		arg.ClientID,
-		arg.SeatsCount,
-		arg.RentalCount,
-		arg.PriceTotal,
-	)
-	var i Booking
-	err := row.Scan(
-		&i.ID,
-		&i.SlotID,
-		&i.ClientID,
-		&i.SeatsCount,
-		&i.RentalCount,
-		&i.Status,
-		&i.PriceTotal,
-		&i.CreatedAt,
-		&i.CancelledAt,
-	)
-	return i, err
-}
+// ---------- CreateClient ----------
 
 const createClient = `-- name: CreateClient :one
 INSERT INTO clients (name, phone)
 VALUES ($1, $2)
-RETURNING id, name, phone, created_at
+RETURNING id, name, phone, is_regular, created_at
 `
 
 type CreateClientParams struct {
@@ -62,49 +27,173 @@ type CreateClientParams struct {
 func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) (Client, error) {
 	row := q.db.QueryRow(ctx, createClient, arg.Name, arg.Phone)
 	var i Client
+	err := row.Scan(&i.ID, &i.Name, &i.Phone, &i.IsRegular, &i.CreatedAt)
+	return i, err
+}
+
+// ---------- GetClientByPhone / GetClientByID ----------
+
+const getClientByPhone = `-- name: GetClientByPhone :one
+SELECT id, name, phone, is_regular, created_at FROM clients
+WHERE phone = $1 LIMIT 1
+`
+
+func (q *Queries) GetClientByPhone(ctx context.Context, phone string) (Client, error) {
+	row := q.db.QueryRow(ctx, getClientByPhone, phone)
+	var i Client
+	err := row.Scan(&i.ID, &i.Name, &i.Phone, &i.IsRegular, &i.CreatedAt)
+	return i, err
+}
+
+const getClientByID = `-- name: GetClientByID :one
+SELECT id, name, phone, is_regular, created_at FROM clients
+WHERE id = $1 LIMIT 1
+`
+
+func (q *Queries) GetClientByID(ctx context.Context, id pgtype.UUID) (Client, error) {
+	row := q.db.QueryRow(ctx, getClientByID, id)
+	var i Client
+	err := row.Scan(&i.ID, &i.Name, &i.Phone, &i.IsRegular, &i.CreatedAt)
+	return i, err
+}
+
+// ---------- ListSlots / GetSlotByID ----------
+// Both return the slot joined with its marshal, matching the nested `Marshal`
+// object the client expects inside `Slot` per openapi.yaml.
+
+type ListSlotsParams struct {
+	StartTime   pgtype.Timestamptz `json:"start_time"`
+	StartTime_2 pgtype.Timestamptz `json:"start_time_2"`
+	Limit       int32              `json:"limit"`
+	Offset      int32              `json:"offset"`
+}
+
+type ListSlotsRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	StartTime        pgtype.Timestamptz `json:"start_time"`
+	TrackConfig      TrackConfig        `json:"track_config"`
+	MaxKarts         int32              `json:"max_karts"`
+	AvailableKarts   int32              `json:"available_karts"`
+	RentalTariff     int32              `json:"rental_tariff"`
+	GatheringPlace   string             `json:"gathering_place"`
+	Status           SlotStatus         `json:"status"`
+	MarshalID        pgtype.UUID        `json:"marshal_id"`
+	MarshalName      string             `json:"marshal_name"`
+	MarshalAvatarUrl string             `json:"marshal_avatar_url"`
+	MarshalRating    pgtype.Numeric     `json:"marshal_rating"`
+}
+
+const listSlots = `-- name: ListSlots :many
+SELECT s.id, s.start_time, s.track_config, s.max_karts, s.available_karts,
+       s.rental_tariff, s.gathering_place, s.status,
+       m.id AS marshal_id, m.name AS marshal_name, m.avatar_url AS marshal_avatar_url, m.rating AS marshal_rating
+FROM slots s
+JOIN marshals m ON s.marshal_id = m.id
+WHERE s.start_time >= $1 AND s.start_time <= $2
+ORDER BY s.start_time ASC
+LIMIT $3 OFFSET $4
+`
+
+func (q *Queries) ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlotsRow, error) {
+	rows, err := q.db.Query(ctx, listSlots, arg.StartTime, arg.StartTime_2, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSlotsRow
+	for rows.Next() {
+		var i ListSlotsRow
+		if err := rows.Scan(
+			&i.ID, &i.StartTime, &i.TrackConfig, &i.MaxKarts, &i.AvailableKarts,
+			&i.RentalTariff, &i.GatheringPlace, &i.Status,
+			&i.MarshalID, &i.MarshalName, &i.MarshalAvatarUrl, &i.MarshalRating,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+type GetSlotByIDRow = ListSlotsRow
+
+const getSlotByID = `-- name: GetSlotByID :one
+SELECT s.id, s.start_time, s.track_config, s.max_karts, s.available_karts,
+       s.rental_tariff, s.gathering_place, s.status,
+       m.id AS marshal_id, m.name AS marshal_name, m.avatar_url AS marshal_avatar_url, m.rating AS marshal_rating
+FROM slots s
+JOIN marshals m ON s.marshal_id = m.id
+WHERE s.id = $1 LIMIT 1
+`
+
+func (q *Queries) GetSlotByID(ctx context.Context, id pgtype.UUID) (GetSlotByIDRow, error) {
+	row := q.db.QueryRow(ctx, getSlotByID, id)
+	var i GetSlotByIDRow
 	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Phone,
-		&i.CreatedAt,
+		&i.ID, &i.StartTime, &i.TrackConfig, &i.MaxKarts, &i.AvailableKarts,
+		&i.RentalTariff, &i.GatheringPlace, &i.Status,
+		&i.MarshalID, &i.MarshalName, &i.MarshalAvatarUrl, &i.MarshalRating,
 	)
 	return i, err
 }
 
-const createRating = `-- name: CreateRating :one
-INSERT INTO ratings (booking_id, instructor_id, rating, comment)
-VALUES ($1, $2, $3, $4)
-RETURNING id, booking_id, instructor_id, rating, comment, created_at
-`
+// ---------- Bookings ----------
 
-type CreateRatingParams struct {
-	BookingID    pgtype.UUID `json:"booking_id"`
-	InstructorID pgtype.UUID `json:"instructor_id"`
-	Rating       int32       `json:"rating"`
-	Comment      pgtype.Text `json:"comment"`
+type CreateBookingParams struct {
+	SlotID   pgtype.UUID `json:"slot_id"`
+	ClientID pgtype.UUID `json:"client_id"`
+	GearType GearType    `json:"gear_type"`
 }
 
-func (q *Queries) CreateRating(ctx context.Context, arg CreateRatingParams) (Rating, error) {
-	row := q.db.QueryRow(ctx, createRating,
-		arg.BookingID,
-		arg.InstructorID,
-		arg.Rating,
-		arg.Comment,
-	)
-	var i Rating
+const createBooking = `-- name: CreateBooking :one
+INSERT INTO bookings (slot_id, client_id, gear_type)
+VALUES ($1, $2, $3)
+RETURNING id, slot_id, client_id, gear_type, status, cancellation_reason, created_at, cancelled_at
+`
+
+// The claim_kart_on_booking trigger (see db_init.sql) enforces BR-01 and raises
+// a Postgres exception (NO_KARTS_AVAILABLE / SLOT_GONE) instead of silently
+// overselling — the handler maps those errors to 409/410.
+func (q *Queries) CreateBooking(ctx context.Context, arg CreateBookingParams) (Booking, error) {
+	row := q.db.QueryRow(ctx, createBooking, arg.SlotID, arg.ClientID, arg.GearType)
+	var i Booking
 	err := row.Scan(
-		&i.ID,
-		&i.BookingID,
-		&i.InstructorID,
-		&i.Rating,
-		&i.Comment,
-		&i.CreatedAt,
+		&i.ID, &i.SlotID, &i.ClientID, &i.GearType, &i.Status,
+		&i.CancellationReason, &i.CreatedAt, &i.CancelledAt,
+	)
+	return i, err
+}
+
+type UpdateBookingStatusParams struct {
+	ID                 pgtype.UUID   `json:"id"`
+	Status             BookingStatus `json:"status"`
+	CancellationReason pgtype.Text   `json:"cancellation_reason"`
+}
+
+const updateBookingStatus = `-- name: UpdateBookingStatus :one
+UPDATE bookings
+SET status = $2,
+    cancellation_reason = COALESCE($3, cancellation_reason),
+    cancelled_at = CASE WHEN $2 IN ('CANCELLED_BY_CLIENT', 'CANCELLED_BY_CENTER') THEN NOW() ELSE cancelled_at END
+WHERE id = $1
+RETURNING id, slot_id, client_id, gear_type, status, cancellation_reason, created_at, cancelled_at
+`
+
+func (q *Queries) UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) (Booking, error) {
+	row := q.db.QueryRow(ctx, updateBookingStatus, arg.ID, arg.Status, arg.CancellationReason)
+	var i Booking
+	err := row.Scan(
+		&i.ID, &i.SlotID, &i.ClientID, &i.GearType, &i.Status,
+		&i.CancellationReason, &i.CreatedAt, &i.CancelledAt,
 	)
 	return i, err
 }
 
 const getBookingByID = `-- name: GetBookingByID :one
-SELECT id, slot_id, client_id, seats_count, rental_count, status, price_total, created_at, cancelled_at FROM bookings
+SELECT id, slot_id, client_id, gear_type, status, cancellation_reason, created_at, cancelled_at FROM bookings
 WHERE id = $1 LIMIT 1
 `
 
@@ -112,126 +201,25 @@ func (q *Queries) GetBookingByID(ctx context.Context, id pgtype.UUID) (Booking, 
 	row := q.db.QueryRow(ctx, getBookingByID, id)
 	var i Booking
 	err := row.Scan(
-		&i.ID,
-		&i.SlotID,
-		&i.ClientID,
-		&i.SeatsCount,
-		&i.RentalCount,
-		&i.Status,
-		&i.PriceTotal,
-		&i.CreatedAt,
-		&i.CancelledAt,
+		&i.ID, &i.SlotID, &i.ClientID, &i.GearType, &i.Status,
+		&i.CancellationReason, &i.CreatedAt, &i.CancelledAt,
 	)
 	return i, err
 }
-
-const getClientByID = `-- name: GetClientByID :one
-SELECT id, name, phone, created_at FROM clients
-WHERE id = $1 LIMIT 1
-`
-
-func (q *Queries) GetClientByID(ctx context.Context, id pgtype.UUID) (Client, error) {
-	row := q.db.QueryRow(ctx, getClientByID, id)
-	var i Client
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Phone,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getClientByPhone = `-- name: GetClientByPhone :one
-SELECT id, name, phone, created_at FROM clients
-WHERE phone = $1 LIMIT 1
-`
-
-func (q *Queries) GetClientByPhone(ctx context.Context, phone string) (Client, error) {
-	row := q.db.QueryRow(ctx, getClientByPhone, phone)
-	var i Client
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Phone,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getSlotByID = `-- name: GetSlotByID :one
-SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
-       s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
-       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
-       i.id as instructor_id, i.name as instructor_name
-FROM slots s
-JOIN routes r ON s.route_id = r.id
-JOIN instructors i ON s.instructor_id = i.id
-WHERE s.id = $1 LIMIT 1
-`
-
-type GetSlotByIDRow struct {
-	ID               pgtype.UUID        `json:"id"`
-	StartAt          pgtype.Timestamptz `json:"start_at"`
-	MaxSeats         int32              `json:"max_seats"`
-	BookedSeats      int32              `json:"booked_seats"`
-	FreeRentalBoards int32              `json:"free_rental_boards"`
-	PricePerSeat     pgtype.Numeric     `json:"price_per_seat"`
-	PriceRental      pgtype.Numeric     `json:"price_rental"`
-	MeetingPoint     string             `json:"meeting_point"`
-	MeetingPointLat  float64            `json:"meeting_point_lat"`
-	MeetingPointLng  float64            `json:"meeting_point_lng"`
-	Status           SlotStatus         `json:"status"`
-	RouteID          pgtype.UUID        `json:"route_id"`
-	RouteName        string             `json:"route_name"`
-	RouteDescription pgtype.Text        `json:"route_description"`
-	RouteType        RouteType          `json:"route_type"`
-	DurationMinutes  int32              `json:"duration_minutes"`
-	RouteGeometry    string             `json:"route_geometry"`
-	InstructorID     pgtype.UUID        `json:"instructor_id"`
-	InstructorName   string             `json:"instructor_name"`
-}
-
-func (q *Queries) GetSlotByID(ctx context.Context, id pgtype.UUID) (GetSlotByIDRow, error) {
-	row := q.db.QueryRow(ctx, getSlotByID, id)
-	var i GetSlotByIDRow
-	err := row.Scan(
-		&i.ID,
-		&i.StartAt,
-		&i.MaxSeats,
-		&i.BookedSeats,
-		&i.FreeRentalBoards,
-		&i.PricePerSeat,
-		&i.PriceRental,
-		&i.MeetingPoint,
-		&i.MeetingPointLat,
-		&i.MeetingPointLng,
-		&i.Status,
-		&i.RouteID,
-		&i.RouteName,
-		&i.RouteDescription,
-		&i.RouteType,
-		&i.DurationMinutes,
-		&i.RouteGeometry,
-		&i.InstructorID,
-		&i.InstructorName,
-	)
-	return i, err
-}
-
-const listBookingsByClient = `-- name: ListBookingsByClient :many
-SELECT b.id, b.slot_id, b.client_id, b.seats_count, b.rental_count, b.status, b.price_total, b.created_at, b.cancelled_at FROM bookings b
-JOIN slots s ON b.slot_id = s.id
-WHERE b.client_id = $1
-ORDER BY s.start_at DESC
-LIMIT $2 OFFSET $3
-`
 
 type ListBookingsByClientParams struct {
 	ClientID pgtype.UUID `json:"client_id"`
 	Limit    int32       `json:"limit"`
 	Offset   int32       `json:"offset"`
 }
+
+const listBookingsByClient = `-- name: ListBookingsByClient :many
+SELECT b.id, b.slot_id, b.client_id, b.gear_type, b.status, b.cancellation_reason, b.created_at, b.cancelled_at FROM bookings b
+JOIN slots s ON b.slot_id = s.id
+WHERE b.client_id = $1
+ORDER BY s.start_time DESC
+LIMIT $2 OFFSET $3
+`
 
 func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByClientParams) ([]Booking, error) {
 	rows, err := q.db.Query(ctx, listBookingsByClient, arg.ClientID, arg.Limit, arg.Offset)
@@ -243,15 +231,8 @@ func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByCl
 	for rows.Next() {
 		var i Booking
 		if err := rows.Scan(
-			&i.ID,
-			&i.SlotID,
-			&i.ClientID,
-			&i.SeatsCount,
-			&i.RentalCount,
-			&i.Status,
-			&i.PriceTotal,
-			&i.CreatedAt,
-			&i.CancelledAt,
+			&i.ID, &i.SlotID, &i.ClientID, &i.GearType, &i.Status,
+			&i.CancellationReason, &i.CreatedAt, &i.CancelledAt,
 		); err != nil {
 			return nil, err
 		}
@@ -263,118 +244,24 @@ func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByCl
 	return items, nil
 }
 
-const listSlots = `-- name: ListSlots :many
-SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
-       s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
-       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
-       i.id as instructor_id, i.name as instructor_name
-FROM slots s
-JOIN routes r ON s.route_id = r.id
-JOIN instructors i ON s.instructor_id = i.id
-WHERE s.start_at >= $1 AND s.start_at <= $2
-ORDER BY s.start_at ASC
-LIMIT $3 OFFSET $4
+// ---------- Ratings ----------
+
+type CreateRatingParams struct {
+	BookingID pgtype.UUID `json:"booking_id"`
+	MarshalID pgtype.UUID `json:"marshal_id"`
+	Rating    int32       `json:"rating"`
+	Comment   pgtype.Text `json:"comment"`
+}
+
+const createRating = `-- name: CreateRating :one
+INSERT INTO ratings (booking_id, marshal_id, rating, comment)
+VALUES ($1, $2, $3, $4)
+RETURNING id, booking_id, marshal_id, rating, comment, created_at
 `
 
-type ListSlotsParams struct {
-	StartAt   pgtype.Timestamptz `json:"start_at"`
-	StartAt_2 pgtype.Timestamptz `json:"start_at_2"`
-	Limit     int32              `json:"limit"`
-	Offset    int32              `json:"offset"`
-}
-
-type ListSlotsRow struct {
-	ID               pgtype.UUID        `json:"id"`
-	StartAt          pgtype.Timestamptz `json:"start_at"`
-	MaxSeats         int32              `json:"max_seats"`
-	BookedSeats      int32              `json:"booked_seats"`
-	FreeRentalBoards int32              `json:"free_rental_boards"`
-	PricePerSeat     pgtype.Numeric     `json:"price_per_seat"`
-	PriceRental      pgtype.Numeric     `json:"price_rental"`
-	MeetingPoint     string             `json:"meeting_point"`
-	MeetingPointLat  float64            `json:"meeting_point_lat"`
-	MeetingPointLng  float64            `json:"meeting_point_lng"`
-	Status           SlotStatus         `json:"status"`
-	RouteID          pgtype.UUID        `json:"route_id"`
-	RouteName        string             `json:"route_name"`
-	RouteDescription pgtype.Text        `json:"route_description"`
-	RouteType        RouteType          `json:"route_type"`
-	DurationMinutes  int32              `json:"duration_minutes"`
-	RouteGeometry    string             `json:"route_geometry"`
-	InstructorID     pgtype.UUID        `json:"instructor_id"`
-	InstructorName   string             `json:"instructor_name"`
-}
-
-func (q *Queries) ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlotsRow, error) {
-	rows, err := q.db.Query(ctx, listSlots,
-		arg.StartAt,
-		arg.StartAt_2,
-		arg.Limit,
-		arg.Offset,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListSlotsRow
-	for rows.Next() {
-		var i ListSlotsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.StartAt,
-			&i.MaxSeats,
-			&i.BookedSeats,
-			&i.FreeRentalBoards,
-			&i.PricePerSeat,
-			&i.PriceRental,
-			&i.MeetingPoint,
-			&i.MeetingPointLat,
-			&i.MeetingPointLng,
-			&i.Status,
-			&i.RouteID,
-			&i.RouteName,
-			&i.RouteDescription,
-			&i.RouteType,
-			&i.DurationMinutes,
-			&i.RouteGeometry,
-			&i.InstructorID,
-			&i.InstructorName,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const updateBookingStatus = `-- name: UpdateBookingStatus :one
-UPDATE bookings
-SET status = $2, cancelled_at = CASE WHEN $2 = 'cancelled'::booking_status OR $2 = 'late_cancel'::booking_status THEN NOW() ELSE cancelled_at END
-WHERE id = $1
-RETURNING id, slot_id, client_id, seats_count, rental_count, status, price_total, created_at, cancelled_at
-`
-
-type UpdateBookingStatusParams struct {
-	ID     pgtype.UUID   `json:"id"`
-	Status BookingStatus `json:"status"`
-}
-
-func (q *Queries) UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) (Booking, error) {
-	row := q.db.QueryRow(ctx, updateBookingStatus, arg.ID, arg.Status)
-	var i Booking
-	err := row.Scan(
-		&i.ID,
-		&i.SlotID,
-		&i.ClientID,
-		&i.SeatsCount,
-		&i.RentalCount,
-		&i.Status,
-		&i.PriceTotal,
-		&i.CreatedAt,
-		&i.CancelledAt,
-	)
+func (q *Queries) CreateRating(ctx context.Context, arg CreateRatingParams) (Rating, error) {
+	row := q.db.QueryRow(ctx, createRating, arg.BookingID, arg.MarshalID, arg.Rating, arg.Comment)
+	var i Rating
+	err := row.Scan(&i.ID, &i.BookingID, &i.MarshalID, &i.Rating, &i.Comment, &i.CreatedAt)
 	return i, err
 }

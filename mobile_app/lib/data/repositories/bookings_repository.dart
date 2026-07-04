@@ -12,15 +12,13 @@ class BookingsRepository {
   /// Создать бронирование.
   Future<BookingModel> createBooking({
     required String slotId,
-    required int seatsCount,
-    int rentalCount = 0,
+    required String gearType,
   }) async {
     try {
       return await _datasource.createBooking(
         CreateBookingRequest(
           slotId: slotId,
-          seatsCount: seatsCount,
-          rentalCount: rentalCount,
+          gearType: gearType,
         ),
       );
     } on DioException catch (e) {
@@ -59,7 +57,9 @@ class BookingsRepository {
       case 401:
         return Exception('Необходимо войти заново');
       case 409:
-        return Exception('Конфликт: ${e.response?.data}');
+        return Exception('Места на этот заезд закончились');
+      case 410:
+        return Exception('Заезд больше недоступен для записи');
       default:
         return Exception('Не удалось выполнить операцию');
     }

@@ -43,8 +43,8 @@ class SlotsRepository {
       return Exception('Нет соединения. Проверьте интернет.');
     }
     if (e.response?.statusCode == 404) {
-      return Exception('Прогулка не найдена');
+      return Exception('Заезд не найден');
     }
-    return Exception('Не удалось загрузить прогулки');
+    return Exception('Не удалось загрузить расписание заездов');
   }
 }

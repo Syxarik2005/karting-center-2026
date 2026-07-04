@@ -12,35 +12,35 @@ SELECT * FROM clients
 WHERE id = $1 LIMIT 1;
 
 -- name: ListSlots :many
-SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
-       s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
-       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
-       i.id as instructor_id, i.name as instructor_name
+SELECT s.id, s.start_time, s.track_config, s.max_karts, s.available_karts,
+       s.rental_tariff, s.gathering_place, s.status,
+       m.id AS marshal_id, m.name AS marshal_name, m.avatar_url AS marshal_avatar_url, m.rating AS marshal_rating
 FROM slots s
-JOIN routes r ON s.route_id = r.id
-JOIN instructors i ON s.instructor_id = i.id
-WHERE s.start_at >= $1 AND s.start_at <= $2
-ORDER BY s.start_at ASC
+JOIN marshals m ON s.marshal_id = m.id
+WHERE s.start_time >= $1 AND s.start_time <= $2
+ORDER BY s.start_time ASC
 LIMIT $3 OFFSET $4;
 
 -- name: GetSlotByID :one
-SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
-       s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
-       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
-       i.id as instructor_id, i.name as instructor_name
+SELECT s.id, s.start_time, s.track_config, s.max_karts, s.available_karts,
+       s.rental_tariff, s.gathering_place, s.status,
+       m.id AS marshal_id, m.name AS marshal_name, m.avatar_url AS marshal_avatar_url, m.rating AS marshal_rating
 FROM slots s
-JOIN routes r ON s.route_id = r.id
-JOIN instructors i ON s.instructor_id = i.id
+JOIN marshals m ON s.marshal_id = m.id
 WHERE s.id = $1 LIMIT 1;
 
 -- name: CreateBooking :one
-INSERT INTO bookings (slot_id, client_id, seats_count, rental_count, price_total)
-VALUES ($1, $2, $3, $4, $5)
+-- The claim_kart_on_booking trigger enforces BR-01 (atomic availability) and
+-- raises NO_KARTS_AVAILABLE / SLOT_GONE — the handler maps those to 409/410.
+INSERT INTO bookings (slot_id, client_id, gear_type)
+VALUES ($1, $2, $3)
 RETURNING *;
 
 -- name: UpdateBookingStatus :one
 UPDATE bookings
-SET status = $2, cancelled_at = CASE WHEN $2 = 'cancelled'::booking_status OR $2 = 'late_cancel'::booking_status THEN NOW() ELSE cancelled_at END
+SET status = $2,
+    cancellation_reason = COALESCE(sqlc.narg(cancellation_reason), cancellation_reason),
+    cancelled_at = CASE WHEN $2 IN ('CANCELLED_BY_CLIENT', 'CANCELLED_BY_CENTER') THEN NOW() ELSE cancelled_at END
 WHERE id = $1
 RETURNING *;
 
@@ -52,10 +52,10 @@ WHERE id = $1 LIMIT 1;
 SELECT b.* FROM bookings b
 JOIN slots s ON b.slot_id = s.id
 WHERE b.client_id = $1
-ORDER BY s.start_at DESC
+ORDER BY s.start_time DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateRating :one
-INSERT INTO ratings (booking_id, instructor_id, rating, comment)
+INSERT INTO ratings (booking_id, marshal_id, rating, comment)
 VALUES ($1, $2, $3, $4)
 RETURNING *;

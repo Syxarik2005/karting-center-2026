@@ -1,10 +1,10 @@
 .PHONY: build run test clean docker-build docker-run docker-up docker-down lint sqlc fmt help
 
 # ──────────────── Variables ────────────────
-APP_NAME   := volna-api
+APP_NAME   := apex-api
 GO         := go
 PORT       := 8080
-DB_URL     := postgres://postgres:postgres@localhost:5432/volna?sslmode=disable
+DB_URL     := postgres://postgres:postgres@localhost:5432/apex?sslmode=disable
 
 # ──────────────── Development ────────────────
 
@@ -48,8 +48,8 @@ db-init:
 ## db-reset: Drop and recreate the database, then apply schema
 db-reset:
 	psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" \
-		-c "DROP DATABASE IF EXISTS volna;" \
-		-c "CREATE DATABASE volna;"
+		-c "DROP DATABASE IF EXISTS apex;" \
+		-c "CREATE DATABASE apex;"
 	$(MAKE) db-init
 
 # ──────────────── Docker ────────────────
@@ -78,6 +78,6 @@ docker-down:
 
 ## help: Show this help message
 help:
-	@echo "Volna API — available targets:"
+	@echo "Apex API — available targets:"
 	@echo ""
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /' | column -t -s ':'

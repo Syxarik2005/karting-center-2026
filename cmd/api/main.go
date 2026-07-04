@@ -9,10 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"volna-backend/internal/api"
-	"volna-backend/internal/config"
-	"volna-backend/internal/repository"
-	"volna-backend/pkg/auth"
+	"apex-backend/internal/api"
+	"apex-backend/internal/config"
+	"apex-backend/internal/repository"
+	"apex-backend/pkg/auth"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -25,7 +25,7 @@ func main() {
 	// Initialize Logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
-	logger.Info("Starting Volna API Server", slog.String("env", cfg.Env))
+	logger.Info("Starting Apex API Server", slog.String("env", cfg.Env))
 
 	// Router
 	r := chi.NewRouter()

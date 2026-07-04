@@ -1,41 +1,68 @@
-/// Модель слота прогулки (из GET /slots, GET /slots/{id}).
+/// Модель маршала (из вложенного объекта Slot.marshal).
+class MarshalModel {
+  final String id;
+  final String name;
+  final String avatarUrl;
+  final double rating;
+
+  const MarshalModel({
+    required this.id,
+    required this.name,
+    required this.avatarUrl,
+    required this.rating,
+  });
+
+  factory MarshalModel.fromJson(Map<String, dynamic> json) {
+    return MarshalModel(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      avatarUrl: json['avatar_url'] as String? ?? '',
+      rating: (json['rating'] as num?)?.toDouble() ?? 5.0,
+    );
+  }
+}
+
+/// Модель слота заезда (из GET /slots, GET /slots/{id}).
+/// Поля 1:1 с components.schemas.Slot в 01-analysis/api/openapi.yaml.
 class SlotModel {
   final String id;
-  final String routeName;
-  final String? routeDescription;
-  final DateTime startAt;
-  final int durationMinutes;
-  final int maxSeats;
-  final int bookedSeats;
-  final String pricePerSeat;
-  final String? priceRental;
+  final DateTime startTime;
+  final String trackConfig; // "SHORT" | "LONG"
+  final MarshalModel marshal;
+  final int availableKarts;
+  final int maxKarts;
+  final String status; // "SCHEDULED" | "CANCELLED_BY_WEATHER" | "COMPLETED"
+  final int rentalTariff;
+  final String gatheringPlace;
 
   const SlotModel({
     required this.id,
-    required this.routeName,
-    this.routeDescription,
-    required this.startAt,
-    required this.durationMinutes,
-    required this.maxSeats,
-    required this.bookedSeats,
-    required this.pricePerSeat,
-    this.priceRental,
+    required this.startTime,
+    required this.trackConfig,
+    required this.marshal,
+    required this.availableKarts,
+    required this.maxKarts,
+    required this.status,
+    required this.rentalTariff,
+    required this.gatheringPlace,
   });
 
-  int get availableSeats => maxSeats - bookedSeats;
-  bool get isFull => availableSeats <= 0;
+  bool get isFull => availableKarts <= 0;
+  bool get isBookable => status == 'SCHEDULED' && !isFull;
 
   factory SlotModel.fromJson(Map<String, dynamic> json) {
     return SlotModel(
       id: json['id'] as String? ?? '',
-      routeName: json['route_name'] as String? ?? '',
-      routeDescription: json['route_description'] as String?,
-      startAt: DateTime.parse(json['start_at'] as String),
-      durationMinutes: json['duration_minutes'] as int? ?? 0,
-      maxSeats: json['max_seats'] as int? ?? 0,
-      bookedSeats: json['booked_seats'] as int? ?? 0,
-      pricePerSeat: json['price_per_seat'] as String? ?? '0',
-      priceRental: json['price_rental'] as String?,
+      startTime: DateTime.parse(json['start_time'] as String),
+      trackConfig: json['track_config'] as String? ?? 'SHORT',
+      marshal: MarshalModel.fromJson(
+        json['marshal'] as Map<String, dynamic>? ?? const {},
+      ),
+      availableKarts: json['available_karts'] as int? ?? 0,
+      maxKarts: json['max_karts'] as int? ?? 0,
+      status: json['status'] as String? ?? 'SCHEDULED',
+      rentalTariff: json['rental_tariff'] as int? ?? 0,
+      gatheringPlace: json['gathering_place'] as String? ?? '',
     );
   }
 }

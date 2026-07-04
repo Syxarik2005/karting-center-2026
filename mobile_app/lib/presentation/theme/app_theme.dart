@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// Design tokens for the Volna app.
+/// Design tokens for the Apex app.
 class AppTheme {
-  // Colors — ocean-inspired palette
+  // Colors — high-contrast racing-inspired palette
   static const Color primary = Color(0xFF0A6EBD);
   static const Color primaryDark = Color(0xFF074B82);
   static const Color accent = Color(0xFF12B886);

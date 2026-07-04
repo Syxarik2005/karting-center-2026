@@ -18,7 +18,7 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	URL string `env:"DATABASE_URL" env-default:"postgres://postgres:postgres@localhost:5432/volna?sslmode=disable"`
+	URL string `env:"DATABASE_URL" env-default:"postgres://postgres:postgres@localhost:5432/apex?sslmode=disable"`
 }
 
 type AuthConfig struct {

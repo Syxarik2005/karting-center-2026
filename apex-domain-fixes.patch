@@ -1,0 +1,3144 @@
+diff --git a/01-analysis/2-requirements/user-stories.md b/01-analysis/2-requirements/user-stories.md
+index 66afe74..a54c9aa 100644
+--- a/01-analysis/2-requirements/user-stories.md
++++ b/01-analysis/2-requirements/user-stories.md
+@@ -1,6 +1,13 @@
+ # User Stories — Клиентское приложение «Апекс»
+ 
+ > Приоритет: **Must** — обязательно для MVP, **Should** — желательно, **Could** — опционально.
++>
++> **Примечание по US-01:** `01-analysis/api/openapi.yaml` (контракт, на который
++> опирается `02-development/client`) не описывает авторизацию — трактует
++> бэкенд как чёрный ящик с уже аутентифицированным клиентом (R-004/R-028 в
++> `customer-brief.md`). US-01 реализован отдельно, в экспериментальном
++> Go-бэкенде + Flutter-приложении (см. корневой `README.md`), как
++> дополнительное упражнение, а не как часть основного MVP-контракта.
+ 
+ ---
+ 
+diff --git a/Dockerfile b/Dockerfile
+index 7295ea1..c2b91d0 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -11,7 +11,7 @@ RUN go mod download
+ 
+ # Copy source and build
+ COPY . .
+-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/volna-api ./cmd/api
++RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/apex-api ./cmd/api
+ 
+ # ---- Run stage ----
+ FROM alpine:3.21
+@@ -20,7 +20,7 @@ RUN apk add --no-cache ca-certificates tzdata
+ 
+ WORKDIR /app
+ 
+-COPY --from=builder /bin/volna-api /app/volna-api
++COPY --from=builder /bin/apex-api /app/apex-api
+ COPY db_init.sql /app/db_init.sql
+ 
+ EXPOSE 8080
+@@ -28,4 +28,4 @@ EXPOSE 8080
+ ENV ENV=production
+ ENV PORT=8080
+ 
+-ENTRYPOINT ["/app/volna-api"]
++ENTRYPOINT ["/app/apex-api"]
+diff --git a/Makefile b/Makefile
+index 094e7df..5c3f59d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,10 +1,10 @@
+ .PHONY: build run test clean docker-build docker-run docker-up docker-down lint sqlc fmt help
+ 
+ # ──────────────── Variables ────────────────
+-APP_NAME   := volna-api
++APP_NAME   := apex-api
+ GO         := go
+ PORT       := 8080
+-DB_URL     := postgres://postgres:postgres@localhost:5432/volna?sslmode=disable
++DB_URL     := postgres://postgres:postgres@localhost:5432/apex?sslmode=disable
+ 
+ # ──────────────── Development ────────────────
+ 
+@@ -48,8 +48,8 @@ db-init:
+ ## db-reset: Drop and recreate the database, then apply schema
+ db-reset:
+ 	psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" \
+-		-c "DROP DATABASE IF EXISTS volna;" \
+-		-c "CREATE DATABASE volna;"
++		-c "DROP DATABASE IF EXISTS apex;" \
++		-c "CREATE DATABASE apex;"
+ 	$(MAKE) db-init
+ 
+ # ──────────────── Docker ────────────────
+@@ -78,6 +78,6 @@ docker-down:
+ 
+ ## help: Show this help message
+ help:
+-	@echo "Volna API — available targets:"
++	@echo "Apex API — available targets:"
+ 	@echo ""
+ 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /' | column -t -s ':'
+diff --git a/PLAN.md b/PLAN.md
+index 2485140..b000a6e 100644
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -1,14 +1,50 @@
+-# Общий план реализации проекта «Волна» (Лекция 2)
++# Общий план реализации — картинг-центр «Апекс»
++
++> Ранняя версия этого файла была практически дословной копией плана
++> референсного проекта «Волна» (SUP-клуб), вплоть до «лимитов досок» вместо
++> лимитов картов. Переписан под фактический бриф Дениса и
++> `01-analysis/api/openapi.yaml`.
+ 
+ ## 1. Бэкенд (Go + PostgreSQL)
+-- **Фаза 1. Инфраструктура:** Инициализация Go-модуля, настройка логгера, конфигурации, генерация SQL-запросов (sqlc) и роутера.
+-- **Фаза 2. Авторизация:** Работа с JWT, логин по телефону, генерация OTP.
+-- **Фаза 3. Расписание (Read-Only):** Отдача списка слотов с фильтрами, пагинацией и джоином таблиц маршрутов и инструкторов.
+-- **Фаза 4. Бронирование:** Транзакционное создание брони (с проверкой лимитов досок и мест), логика отмены (ранняя/поздняя).
++- **Фаза 1. Инфраструктура:** Go-модуль (`apex-backend`), конфигурация,
++  роутер (chi), генерация SQL-запросов (sqlc) — см. `db_init.sql`,
++  `internal/repository/`.
++- **Фаза 2. Авторизация:** JWT + мок-OTP по телефону (`pkg/auth`,
++  `/auth/send-code`, `/auth/login`). Это дополнительное упражнение по
++  «смежным ролям» — контракт клиентского приложения
++  (`01-analysis/api/openapi.yaml`) не описывает авторизацию и предполагает
++  уже аутентифицированного клиента (R-004/R-028 в customer-brief.md); см.
++  пояснение в корневом `README.md`.
++- **Фаза 3. Расписание (Read-Only):** `GET /slots`, `GET /slots/{id}` —
++  список слотов с фильтром по датам, джоин с маршалами (не «инструкторами
++  на маршрутах», как было в черновике).
++- **Фаза 4. Бронирование:** Транзакционное создание брони (с проверкой
++  лимита картов на слот — BR-01) через Postgres-триггер
++  `claim_kart_on_booking`; отмена с порогом по времени (BR-02, см.
++  `internal/api/handler.go`, `cancelCutoff`).
++- **Фаза 5. Оценка маршала:** `POST /client/bookings/{id}/rate` — один
++  отзыв на бронирование, средний рейтинг маршала пересчитывается триггером.
+ 
+ ## 2. Клиентское мобильное приложение (Flutter)
+-- **Фаза 1. Инфраструктура:** Инициализация проекта, настройка слоев (Clean Architecture), роутинг, базовый UI-кит.
+-- **Фаза 2. Авторизация:** Экран SCR-001 (Вход/Регистрация), сохранение токена.
+-- **Фаза 3. Расписание:** SCR-002 (Список слотов), BS-001 (Фильтры), SCR-003 (Карточка слота).
+-- **Фаза 4. Бронирование:** SCR-004 (Оформление), SCR-005 (История броней), SCR-006 (Детали брони и отмена).
+-- **Фаза 5. Профиль:** SCR-007 (Настройки пользователя).
++- **Фаза 1. Инфраструктура:** Clean Architecture (data/di/presentation),
++  роутинг, дизайн-токены (`AppTheme`).
++- **Фаза 2. Авторизация:** экран входа по телефону/OTP, сохранение токена
++  (`login_screen.dart`, `auth_interceptor.dart`).
++- **Фаза 3. Расписание:** список слотов картинга (`SlotModel` — трасса
++  SHORT/LONG, маршал, доступные карты), фильтры по периоду/трассе.
++  *(Ещё не реализовано в этой поставке — только модели и datasource;
++  экраны расписания/бронирования как в `02-development/client` (React)
++  здесь предстоит добавить отдельно.)*
++- **Фаза 4. Бронирование:** выбор экипировки (OWN/RENTAL) вместо мест на
++  борде, история броней, отмена.
++- **Фаза 5. Профиль:** `GET /client/profile`.
++
++## Статус на момент сдачи
++- Бэкенд: домен переписан под Апекс полностью (схема, sqlc-слой,
++  хендлеры, маршруты под `/client/*`), эндпоинты покрывают весь контракт
++  `openapi.yaml` + доп. авторизацию.
++- Flutter: слой данных (модели, datasource, репозитории) переписан под
++  Апекс; экран логина реализован; экраны расписания/бронирования —
++  предстоит доделать (см. `02-development/client` — рабочий React-аналог
++  этих экранов уже полностью реализован и покрыт тестами, можно
++  использовать как референс для Flutter-версии).
+diff --git a/README.md b/README.md
+index 44f3c0e..a22fddd 100644
+--- a/README.md
++++ b/README.md
+@@ -4,24 +4,40 @@
+ 
+ Этот проект выполнен в рамках **Летней Школы Surf**. Здесь собраны артефакты выявления требований и проектирования системы на основе первоначального брифа от владельца бизнеса.
+ 
+-## 📑 Структура проекта (01-analysis)
++## 📑 Структура проекта
+ 
+-Вся аналитика и документация находится в директории `01-analysis/`:
++Проект состоит из трёх частей, по дням работы летней школы:
++
++- **`01-analysis/`** — аналитика и проектирование (бриф, требования, дизайн, API-контракт).
++- **`02-development/`** — клиентское веб-приложение (React, мобильный форм-фактор), 4 фичи поверх контракта из `01-analysis/api/openapi.yaml`. См. `02-development/README.md`.
++- **`03-testing/`** — тест-план, 18 тест-кейсов, 2 найденных и исправленных бага. См. `03-testing/README.md`.
++
++Дополнительно, в порядке практики «смежных ролей» (бэкенд/мобильная разработка), в репозитории также лежат:
++- **`cmd/`, `internal/`, `pkg/`, `db_init.sql`** — экспериментальный Go-бэкенд под тот же домен.
++- **`mobile_app/`** — экспериментальное Flutter-приложение (слой данных переписан под Апекс, экраны расписания/бронирования ещё не дореализованы — референс для них уже есть в `02-development/client`).
++
++**Важно:** `02-development/client` (React) — самостоятельная, полностью рабочая
++реализация клиента поверх `01-analysis/api/openapi.yaml`, где бэкенд
++трактуется как чёрный ящик (см. ниже). Go-бэкенд и Flutter-приложение — это
++отдельное, дополнительное упражнение «а что если бы мы сами писали и бэкенд»,
++не обязательное по контракту `openapi.yaml` и не заменяющее React-реализацию.
++
++Содержимое `01-analysis/`:
+ 
+ - 📁 **`0-customer-brief/`** — Исходный "живой" бриф от Дениса, владельца картинг-центра.
+ - 📁 **`1-elicitation/`** — Выявление требований. Содержит описание предметной области (Domain description) и стратегические вопросы к заказчику.
+-- 📁 **`2-requirements/`** — (Зарезервировано) Требования к системе.
+-- 📁 **`3-design-brief/`** — (Зарезервировано) Бриф на дизайн.
++- 📁 **`2-requirements/`** — User stories, сценарии и acceptance-критерии MVP.
++- 📁 **`3-design-brief/`** — Бриф на дизайн клиентского приложения.
+ - 📁 **`4-design/`** 
+   - `screens/screen-registry.md` — Полный реестр экранов мобильного приложения и их стейтов.
+   - `er-model-and-sequences.md` — ER-модель клиентской части и Sequence diagram для процесса бронирования заезда (учитывающая все краевые случаи: отмена, нехватка мест).
+ - 📁 **`5-mobile-app-spec/`** — (Зарезервировано) Детальные спецификации логики приложения.
+ - 📁 **`api/`** — Контракт взаимодействия с бэкендом (OpenAPI Specification в формате YAML).
+-- 📁 **`checklists/` & `prompts/`** — Вспомогательные материалы.
++- 📁 **`prompts/`** — Промпты, использованные при генерации аналитики.
+ 
+ ## 🎯 Ключевые особенности домена
+ 
+-1. **Бэкенд как Black Box:** Мы не управляем админкой, расписанием или маршалами. Приложение только потребляет готовые данные и отдаёт команды на бронирование.
++1. **Бэкенд как Black Box (для `02-development/client`):** React-клиент не управляет админкой, расписанием или маршалами — только потребляет готовые данные из `openapi.yaml` и отдаёт команды на бронирование. Экспериментальный Go-бэкенд в этом репозитории существует параллельно, как отдельное упражнение, и не отменяет этого допущения для основной поставки.
+ 2. **Атомарность:** Обработка отказов при одновременной записи (ловушка 409 Conflict).
+ 3. **Отмены и погода:** Поскольку картинг уличный, учтён сценарий внезапной отмены заездов администрацией из-за непогоды (с пуш-уведомлением клиентам).
+ 
+diff --git a/app_sandbox.html b/app_sandbox.html
+deleted file mode 100644
+index 64c8842..0000000
+--- a/app_sandbox.html
++++ /dev/null
+@@ -1,987 +0,0 @@
+-<!DOCTYPE html>
+-<html lang="en">
+-<head>
+-  <meta charset="UTF-8">
+-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+-  <title>Volna SUP Club - Interactive Developer Sandbox</title>
+-  <style>
+-    :root {
+-      --bg-color: #0b0f19;
+-      --card-bg: rgba(22, 30, 49, 0.7);
+-      --card-border: rgba(255, 255, 255, 0.08);
+-      --text-color: #f3f4f6;
+-      --text-muted: #9ca3af;
+-      --primary: #06b6d4;
+-      --primary-hover: #0891b2;
+-      --accent: #ec4899;
+-      --success: #10b981;
+-      --error: #ef4444;
+-      --warning: #f59e0b;
+-    }
+-
+-    * {
+-      box-sizing: border-box;
+-      margin: 0;
+-      padding: 0;
+-    }
+-
+-    body {
+-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+-      background-color: var(--bg-color);
+-      color: var(--text-color);
+-      min-height: 100vh;
+-      display: flex;
+-      flex-direction: column;
+-      line-height: 1.5;
+-    }
+-
+-    header {
+-      background: rgba(15, 23, 42, 0.8);
+-      backdrop-filter: blur(8px);
+-      border-bottom: 1px solid var(--card-border);
+-      padding: 1.25rem 2rem;
+-      position: sticky;
+-      top: 0;
+-      z-index: 100;
+-      display: flex;
+-      justify-content: space-between;
+-      align-items: center;
+-    }
+-
+-    h1 {
+-      font-size: 1.5rem;
+-      font-weight: 700;
+-      background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+-      -webkit-background-clip: text;
+-      -webkit-text-fill-color: transparent;
+-      display: flex;
+-      align-items: center;
+-      gap: 0.5rem;
+-    }
+-
+-    .container {
+-      max-width: 1200px;
+-      margin: 2rem auto;
+-      padding: 0 1.5rem;
+-      flex: 1;
+-      display: grid;
+-      grid-template-columns: 1fr;
+-      gap: 2rem;
+-    }
+-
+-    @media (min-width: 768px) {
+-      .container {
+-        grid-template-columns: 2fr 1fr;
+-      }
+-      .span-full {
+-        grid-column: span 2;
+-      }
+-    }
+-
+-    .card {
+-      background: var(--card-bg);
+-      border: 1px solid var(--card-border);
+-      border-radius: 16px;
+-      padding: 1.75rem;
+-      backdrop-filter: blur(12px);
+-      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+-      transition: transform 0.2s, box-shadow 0.2s;
+-    }
+-
+-    .card:hover {
+-      box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.6);
+-    }
+-
+-    .card-title {
+-      font-size: 1.2rem;
+-      font-weight: 600;
+-      margin-bottom: 1.25rem;
+-      border-left: 4px solid var(--primary);
+-      padding-left: 0.75rem;
+-      display: flex;
+-      justify-content: space-between;
+-      align-items: center;
+-    }
+-
+-    /* Auth Styling */
+-    .form-group {
+-      margin-bottom: 1.25rem;
+-    }
+-
+-    label {
+-      display: block;
+-      font-size: 0.875rem;
+-      color: var(--text-muted);
+-      margin-bottom: 0.5rem;
+-    }
+-
+-    input, select, textarea {
+-      width: 100%;
+-      background: rgba(15, 23, 42, 0.6);
+-      border: 1px solid var(--card-border);
+-      border-radius: 8px;
+-      padding: 0.75rem;
+-      color: var(--text-color);
+-      font-size: 1rem;
+-      outline: none;
+-      transition: border-color 0.2s;
+-    }
+-
+-    input:focus, select:focus, textarea:focus {
+-      border-color: var(--primary);
+-    }
+-
+-    button {
+-      background: var(--primary);
+-      color: var(--bg-color);
+-      font-weight: 600;
+-      border: none;
+-      border-radius: 8px;
+-      padding: 0.75rem 1.5rem;
+-      font-size: 1rem;
+-      cursor: pointer;
+-      transition: background 0.2s, opacity 0.2s;
+-      display: inline-flex;
+-      align-items: center;
+-      justify-content: center;
+-      gap: 0.5rem;
+-      width: 100%;
+-    }
+-
+-    button:hover {
+-      background: var(--primary-hover);
+-    }
+-
+-    button:disabled {
+-      opacity: 0.5;
+-      cursor: not-allowed;
+-    }
+-
+-    .btn-secondary {
+-      background: rgba(255, 255, 255, 0.05);
+-      color: var(--text-color);
+-      border: 1px solid var(--card-border);
+-    }
+-
+-    .btn-secondary:hover {
+-      background: rgba(255, 255, 255, 0.1);
+-    }
+-
+-    .btn-danger {
+-      background: var(--error);
+-      color: white;
+-    }
+-
+-    .btn-danger:hover {
+-      background: #dc2626;
+-    }
+-
+-    /* Slots Grid */
+-    .slots-grid {
+-      display: grid;
+-      grid-template-columns: 1fr;
+-      gap: 1.25rem;
+-    }
+-
+-    @media (min-width: 640px) {
+-      .slots-grid {
+-        grid-template-columns: 1fr 1fr;
+-      }
+-    }
+-
+-    .slot-card {
+-      background: rgba(15, 23, 42, 0.4);
+-      border: 1px solid var(--card-border);
+-      border-radius: 12px;
+-      padding: 1.25rem;
+-      display: flex;
+-      flex-direction: column;
+-      gap: 0.75rem;
+-      position: relative;
+-      overflow: hidden;
+-    }
+-
+-    .slot-type-badge {
+-      position: absolute;
+-      top: 1.25rem;
+-      right: 1.25rem;
+-      padding: 0.25rem 0.5rem;
+-      border-radius: 6px;
+-      font-size: 0.75rem;
+-      font-weight: 600;
+-    }
+-
+-    .badge-novice {
+-      background: rgba(16, 185, 129, 0.15);
+-      color: var(--success);
+-      border: 1px solid rgba(16, 185, 129, 0.3);
+-    }
+-
+-    .badge-experienced {
+-      background: rgba(245, 158, 11, 0.15);
+-      color: var(--warning);
+-      border: 1px solid rgba(245, 158, 11, 0.3);
+-    }
+-
+-    .slot-title {
+-      font-size: 1.1rem;
+-      font-weight: 600;
+-      padding-right: 5rem;
+-    }
+-
+-    .slot-meta {
+-      font-size: 0.875rem;
+-      color: var(--text-muted);
+-      display: flex;
+-      flex-direction: column;
+-      gap: 0.25rem;
+-    }
+-
+-    .slot-price {
+-      font-size: 1.2rem;
+-      font-weight: 700;
+-      color: var(--primary);
+-    }
+-
+-    .instructor-box {
+-      background: rgba(255, 255, 255, 0.03);
+-      border: 1px solid rgba(255, 255, 255, 0.05);
+-      padding: 0.5rem 0.75rem;
+-      border-radius: 8px;
+-      font-size: 0.85rem;
+-      display: flex;
+-      align-items: center;
+-      justify-content: space-between;
+-    }
+-
+-    .rating-stars {
+-      color: var(--warning);
+-      font-weight: bold;
+-    }
+-
+-    /* Bookings list */
+-    .bookings-list {
+-      display: flex;
+-      flex-direction: column;
+-      gap: 1rem;
+-    }
+-
+-    .booking-card {
+-      border: 1px solid var(--card-border);
+-      background: rgba(15, 23, 42, 0.4);
+-      border-radius: 12px;
+-      padding: 1.25rem;
+-      display: flex;
+-      flex-direction: column;
+-      gap: 0.75rem;
+-    }
+-
+-    .booking-status {
+-      display: inline-block;
+-      align-self: flex-start;
+-      padding: 0.25rem 0.5rem;
+-      border-radius: 6px;
+-      font-size: 0.75rem;
+-      font-weight: 600;
+-      text-transform: uppercase;
+-    }
+-
+-    .status-active {
+-      background: rgba(16, 185, 129, 0.15);
+-      color: var(--success);
+-    }
+-
+-    .status-cancelled {
+-      background: rgba(239, 68, 68, 0.15);
+-      color: var(--error);
+-    }
+-
+-    .rating-form {
+-      border-top: 1px dashed var(--card-border);
+-      padding-top: 0.75rem;
+-      display: flex;
+-      flex-direction: column;
+-      gap: 0.5rem;
+-    }
+-
+-    .stars-picker {
+-      display: flex;
+-      gap: 0.25rem;
+-      font-size: 1.5rem;
+-      cursor: pointer;
+-      color: var(--text-muted);
+-    }
+-
+-    .stars-picker span.active {
+-      color: var(--warning);
+-    }
+-
+-    /* Modal / Overlay */
+-    .overlay {
+-      position: fixed;
+-      top: 0;
+-      left: 0;
+-      width: 100vw;
+-      height: 100vh;
+-      background: rgba(0,0,0,0.85);
+-      backdrop-filter: blur(4px);
+-      z-index: 1000;
+-      display: flex;
+-      justify-content: center;
+-      align-items: center;
+-      opacity: 0;
+-      pointer-events: none;
+-      transition: opacity 0.3s;
+-    }
+-
+-    .overlay.active {
+-      opacity: 1;
+-      pointer-events: auto;
+-    }
+-
+-    .modal {
+-      background: #0f172a;
+-      border: 1px solid var(--card-border);
+-      width: 90%;
+-      max-width: 450px;
+-      border-radius: 16px;
+-      padding: 2rem;
+-      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8);
+-      display: flex;
+-      flex-direction: column;
+-      gap: 1.5rem;
+-    }
+-
+-    /* Toast Notification */
+-    .toast-container {
+-      position: fixed;
+-      bottom: 2rem;
+-      right: 2rem;
+-      z-index: 2000;
+-      display: flex;
+-      flex-direction: column;
+-      gap: 0.75rem;
+-    }
+-
+-    .toast {
+-      background: rgba(15, 23, 42, 0.95);
+-      border-left: 4px solid var(--primary);
+-      color: var(--text-color);
+-      padding: 1rem 1.5rem;
+-      border-radius: 8px;
+-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);
+-      backdrop-filter: blur(8px);
+-      display: flex;
+-      justify-content: space-between;
+-      align-items: center;
+-      min-width: 300px;
+-      animation: slideIn 0.3s forwards;
+-    }
+-
+-    @keyframes slideIn {
+-      from { transform: translateX(100%); opacity: 0; }
+-      to { transform: translateX(0); opacity: 1; }
+-    }
+-
+-    .toast.success { border-left-color: var(--success); }
+-    .toast.error { border-left-color: var(--error); }
+-    .toast.warning { border-left-color: var(--warning); }
+-
+-    .toast-close {
+-      cursor: pointer;
+-      color: var(--text-muted);
+-      margin-left: 1rem;
+-    }
+-
+-    .dev-badge {
+-      background: rgba(6, 182, 212, 0.15);
+-      color: var(--primary);
+-      border: 1px solid var(--primary);
+-      padding: 0.25rem 0.5rem;
+-      border-radius: 6px;
+-      font-size: 0.75rem;
+-      font-family: monospace;
+-    }
+-  </style>
+-</head>
+-<body>
+-
+-  <header>
+-    <h1>🏄 Volna SUP Club Sandbox</h1>
+-    <div style="display: flex; align-items: center; gap: 1rem;">
+-      <span class="dev-badge">API: localhost:8080</span>
+-      <button id="logoutBtn" class="btn-secondary" style="width: auto; padding: 0.5rem 1rem; font-size: 0.875rem; display: none;">Logout</button>
+-    </div>
+-  </header>
+-
+-  <div class="container">
+-    <!-- Left column: Main Work Area -->
+-    <main style="display: flex; flex-direction: column; gap: 2rem;">
+-      
+-      <!-- Slots Catalog -->
+-      <section class="card">
+-        <div class="card-title">
+-          <span>Available Catalog Slots</span>
+-          <button id="refreshSlotsBtn" class="btn-secondary" style="width: auto; padding: 0.4rem 0.8rem; font-size: 0.85rem;">🔄 Refresh</button>
+-        </div>
+-        
+-        <!-- Filters -->
+-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+-          <div>
+-            <label>Date From</label>
+-            <input type="date" id="filterDateFrom">
+-          </div>
+-          <div>
+-            <label>Date To</label>
+-            <input type="date" id="filterDateTo">
+-          </div>
+-        </div>
+-
+-        <div class="slots-grid" id="slotsContainer">
+-          <p style="grid-column: span 2; text-align: center; color: var(--text-muted); padding: 2rem 0;">Loading slots...</p>
+-        </div>
+-      </section>
+-
+-      <!-- Client Bookings -->
+-      <section class="card" id="bookingsCard" style="display: none;">
+-        <div class="card-title">My Bookings History</div>
+-        <div class="bookings-list" id="bookingsContainer">
+-          <p style="color: var(--text-muted);">No bookings created yet.</p>
+-        </div>
+-      </section>
+-    </main>
+-
+-    <!-- Right column: Sidebar (Auth & Session info) -->
+-    <aside style="display: flex; flex-direction: column; gap: 2rem;">
+-      <!-- Authentication Card -->
+-      <section class="card" id="authCard">
+-        <div class="card-title">Client Login (Mock OTP)</div>
+-        
+-        <div id="authStep1">
+-          <div class="form-group">
+-            <label for="phoneInput">Phone Number</label>
+-            <input type="tel" id="phoneInput" placeholder="+7 (999) 123-4567" value="+79998887766">
+-          </div>
+-          <button id="sendCodeBtn">Send Verification Code</button>
+-        </div>
+-
+-        <div id="authStep2" style="display: none;">
+-          <div style="background: rgba(6, 182, 212, 0.1); border: 1px dashed var(--primary); padding: 0.75rem; border-radius: 8px; font-size: 0.875rem; margin-bottom: 1.25rem;">
+-            🔑 OTP Sent! Use code <strong>0000</strong> to login.
+-          </div>
+-          <div class="form-group">
+-            <label for="nameInput">Full Name (New clients only)</label>
+-            <input type="text" id="nameInput" placeholder="Ivan Ivanov" value="Alexander">
+-          </div>
+-          <div class="form-group">
+-            <label for="codeInput">OTP Code</label>
+-            <input type="text" id="codeInput" placeholder="0000" maxlength="4">
+-          </div>
+-          <div style="display: flex; gap: 0.5rem;">
+-            <button id="backToPhoneBtn" class="btn-secondary">Back</button>
+-            <button id="loginBtn">Verify & Login</button>
+-          </div>
+-        </div>
+-      </section>
+-
+-      <!-- Active Session Profile Info -->
+-      <section class="card" id="profileCard" style="display: none;">
+-        <div class="card-title">Active Session</div>
+-        <div style="display: flex; flex-direction: column; gap: 0.75rem; font-size: 0.9rem;">
+-          <div><span style="color: var(--text-muted);">Client Name:</span> <strong id="profileName">--</strong></div>
+-          <div><span style="color: var(--text-muted);">Phone:</span> <strong id="profilePhone">--</strong></div>
+-          <div><span style="color: var(--text-muted);">Client UUID:</span> <code id="profileId" style="font-size: 0.75rem; background: #000; padding: 0.2rem 0.4rem; border-radius: 4px;">--</code></div>
+-        </div>
+-      </section>
+-    </aside>
+-  </div>
+-
+-  <!-- Booking Modal -->
+-  <div class="overlay" id="bookingOverlay">
+-    <div class="modal">
+-      <h3 style="font-size: 1.25rem; font-weight: 700; border-bottom: 1px solid var(--card-border); padding-bottom: 0.75rem;">Create a Booking</h3>
+-      <div style="display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.9rem;">
+-        <div>Route: <strong id="modalRouteName">Sunset Route</strong></div>
+-        <div>Start time: <span id="modalStartTime" style="color: var(--text-muted);">Monday, 10:00</span></div>
+-      </div>
+-      <div>
+-        <div class="form-group">
+-          <label for="seatsInput">Number of Seats (1 to 3)</label>
+-          <select id="seatsInput">
+-            <option value="1">1 Seat</option>
+-            <option value="2">2 Seats</option>
+-            <option value="3">3 Seats</option>
+-          </select>
+-        </div>
+-        <div class="form-group">
+-          <label for="rentalInput">Number of Rental Boards</label>
+-          <select id="rentalInput">
+-            <option value="0">0 Rental Boards</option>
+-            <option value="1">1 Board</option>
+-            <option value="2">2 Boards</option>
+-            <option value="3">3 Boards</option>
+-          </select>
+-        </div>
+-      </div>
+-      <div style="display: flex; gap: 1rem;">
+-        <button id="cancelBookingModalBtn" class="btn-secondary">Cancel</button>
+-        <button id="confirmBookingBtn">Book Slots</button>
+-      </div>
+-    </div>
+-  </div>
+-
+-  <div class="toast-container" id="toastContainer"></div>
+-
+-  <script>
+-    const API_BASE = 'http://localhost:8080';
+-    let token = localStorage.getItem('volna_jwt') || '';
+-    let currentClient = null;
+-    let selectedSlotIdForBooking = null;
+-
+-    // Elements
+-    const authCard = document.getElementById('authCard');
+-    const authStep1 = document.getElementById('authStep1');
+-    const authStep2 = document.getElementById('authStep2');
+-    const phoneInput = document.getElementById('phoneInput');
+-    const nameInput = document.getElementById('nameInput');
+-    const codeInput = document.getElementById('codeInput');
+-    const sendCodeBtn = document.getElementById('sendCodeBtn');
+-    const loginBtn = document.getElementById('loginBtn');
+-    const backToPhoneBtn = document.getElementById('backToPhoneBtn');
+-    const logoutBtn = document.getElementById('logoutBtn');
+-
+-    const profileCard = document.getElementById('profileCard');
+-    const profileName = document.getElementById('profileName');
+-    const profilePhone = document.getElementById('profilePhone');
+-    const profileId = document.getElementById('profileId');
+-
+-    const bookingsCard = document.getElementById('bookingsCard');
+-    const bookingsContainer = document.getElementById('bookingsContainer');
+-
+-    const slotsContainer = document.getElementById('slotsContainer');
+-    const refreshSlotsBtn = document.getElementById('refreshSlotsBtn');
+-    const filterDateFrom = document.getElementById('filterDateFrom');
+-    const filterDateTo = document.getElementById('filterDateTo');
+-
+-    const bookingOverlay = document.getElementById('bookingOverlay');
+-    const cancelBookingModalBtn = document.getElementById('cancelBookingModalBtn');
+-    const confirmBookingBtn = document.getElementById('confirmBookingBtn');
+-    const modalRouteName = document.getElementById('modalRouteName');
+-    const modalStartTime = document.getElementById('modalStartTime');
+-    const seatsInput = document.getElementById('seatsInput');
+-    const rentalInput = document.getElementById('rentalInput');
+-
+-    const toastContainer = document.getElementById('toastContainer');
+-
+-    // Toast utility
+-    function showToast(message, type = 'success') {
+-      const toast = document.createElement('div');
+-      toast.className = `toast ${type}`;
+-      toast.innerHTML = `
+-        <span>${message}</span>
+-        <span class="toast-close">&times;</span>
+-      `;
+-      toastContainer.appendChild(toast);
+-
+-      // Close handler
+-      toast.querySelector('.toast-close').onclick = () => toast.remove();
+-
+-      // Auto-remove
+-      setTimeout(() => {
+-        if (toast.parentNode) toast.remove();
+-      }, 5000);
+-    }
+-
+-    // Set default date range filters (Today to Today + 7 days)
+-    const today = new Date();
+-    const nextWeek = new Date();
+-    nextWeek.setDate(today.getDate() + 7);
+-    
+-    filterDateFrom.value = today.toISOString().split('T')[0];
+-    filterDateTo.value = nextWeek.toISOString().split('T')[0];
+-
+-    // Auth handlers
+-    sendCodeBtn.onclick = async () => {
+-      const phone = phoneInput.value.trim();
+-      if (!phone) {
+-        showToast('Please enter a phone number', 'error');
+-        return;
+-      }
+-      try {
+-        const res = await fetch(`${API_BASE}/auth/send-code`, {
+-          method: 'POST',
+-          headers: { 'Content-Type': 'application/json' },
+-          body: JSON.stringify({ phone })
+-        });
+-        if (res.ok) {
+-          const data = await res.json();
+-          showToast(data.message || 'OTP Code sent successfully', 'success');
+-          authStep1.style.display = 'none';
+-          authStep2.style.display = 'block';
+-        } else {
+-          showToast('Failed to send verification code', 'error');
+-        }
+-      } catch (err) {
+-        showToast('API Connection error', 'error');
+-      }
+-    };
+-
+-    backToPhoneBtn.onclick = () => {
+-      authStep2.style.display = 'none';
+-      authStep1.style.display = 'block';
+-    };
+-
+-    loginBtn.onclick = async () => {
+-      const phone = phoneInput.value.trim();
+-      const name = nameInput.value.trim();
+-      const code = codeInput.value.trim();
+-      if (!code) {
+-        showToast('Please enter code', 'error');
+-        return;
+-      }
+-      try {
+-        const res = await fetch(`${API_BASE}/auth/login`, {
+-          method: 'POST',
+-          headers: { 'Content-Type': 'application/json' },
+-          body: JSON.stringify({ phone, name, code })
+-        });
+-        if (res.ok) {
+-          const data = await res.json();
+-          token = data.token;
+-          localStorage.setItem('volna_jwt', token);
+-          currentClient = data.client;
+-          showToast('LoggedIn successfully!', 'success');
+-          updateSessionUI();
+-          loadBookings();
+-        } else {
+-          showToast('Invalid OTP Code', 'error');
+-        }
+-      } catch (err) {
+-        showToast('Authentication failed', 'error');
+-      }
+-    };
+-
+-    logoutBtn.onclick = () => {
+-      token = '';
+-      localStorage.removeItem('volna_jwt');
+-      currentClient = null;
+-      updateSessionUI();
+-      showToast('Logged out', 'warning');
+-    };
+-
+-    function updateSessionUI() {
+-      if (token) {
+-        authCard.style.display = 'none';
+-        logoutBtn.style.display = 'block';
+-        profileCard.style.display = 'block';
+-        bookingsCard.style.display = 'block';
+-        if (currentClient) {
+-          profileName.textContent = currentClient.name;
+-          profilePhone.textContent = currentClient.phone;
+-          profileId.textContent = currentClient.id;
+-        }
+-      } else {
+-        authCard.style.display = 'block';
+-        authStep1.style.display = 'block';
+-        authStep2.style.display = 'none';
+-        logoutBtn.style.display = 'none';
+-        profileCard.style.display = 'none';
+-        bookingsCard.style.display = 'none';
+-      }
+-    }
+-
+-    // Load Slots Catalog
+-    async function loadSlots() {
+-      slotsContainer.innerHTML = `<p style="grid-column: span 2; text-align: center; color: var(--text-muted); padding: 2rem 0;">Updating slots...</p>`;
+-      const from = filterDateFrom.value;
+-      const to = filterDateTo.value;
+-      
+-      try {
+-        const url = `${API_BASE}/slots?date_from=${from}&date_to=${to}`;
+-        const res = await fetch(url);
+-        if (!res.ok) throw new Error('Slots fetch failed');
+-        const slots = await res.json();
+-
+-        if (slots.length === 0) {
+-          slotsContainer.innerHTML = `<p style="grid-column: span 2; text-align: center; color: var(--text-muted); padding: 2rem 0;">No slots available in this period.</p>`;
+-          return;
+-        }
+-
+-        slotsContainer.innerHTML = '';
+-        slots.forEach(slot => {
+-          // Parse dynamic fields correctly reflecting aliases
+-          const maxSeats = slot.max_seats || 0;
+-          const bookedSeats = slot.booked_seats || 0;
+-          const freeSeats = maxSeats - bookedSeats;
+-          const price = slot.price_per_seat || '0';
+-          const duration = slot.duration_minutes || 0;
+-          const routeDesc = slot.route_description || 'No description available.';
+-          const instructorName = slot.instructor_name || 'N/A';
+-          const instructorRating = slot.instructor_rating !== undefined ? Number(slot.instructor_rating).toFixed(2) : '5.00';
+-
+-          const card = document.createElement('div');
+-          card.className = 'slot-card';
+-          card.innerHTML = `
+-            <span class="slot-type-badge ${slot.route_type === 'novice' ? 'badge-novice' : 'badge-experienced'}">
+-              ${slot.route_type.toUpperCase()}
+-            </span>
+-            <div class="slot-title">${slot.route_name}</div>
+-            <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.3;">${routeDesc}</p>
+-            
+-            <div class="slot-meta">
+-              <span>📅 ${new Date(slot.start_at).toLocaleString()} (${duration} mins)</span>
+-              <span>📍 ${slot.meeting_point}</span>
+-              <span>👥 Seats: <strong>${freeSeats} free</strong> of ${maxSeats}</span>
+-            </div>
+-
+-            <div class="instructor-box">
+-              <span>Instructor: <strong>${instructorName}</strong></span>
+-              <span class="rating-stars">⭐ ${instructorRating}</span>
+-            </div>
+-
+-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 0.5rem;">
+-              <span class="slot-price">${price} ₽</span>
+-              <button onclick="openBookingModal('${slot.id}', '${slot.route_name}', '${slot.start_at}')" 
+-                class="btn-secondary" style="width: auto; padding: 0.4rem 1rem;" 
+-                ${freeSeats <= 0 ? 'disabled' : ''}>
+-                ${freeSeats <= 0 ? 'Full' : 'Book'}
+-              </button>
+-            </div>
+-          `;
+-          slotsContainer.appendChild(card);
+-        });
+-      } catch (err) {
+-        slotsContainer.innerHTML = `<p style="grid-column: span 2; text-align: center; color: var(--error); padding: 2rem 0;">Connection error while fetching slots.</p>`;
+-      }
+-    }
+-
+-    // Load Client Bookings
+-    async function loadBookings() {
+-      if (!token) return;
+-      bookingsContainer.innerHTML = '<p style="color: var(--text-muted);">Fetching bookings...</p>';
+-      try {
+-        const res = await fetch(`${API_BASE}/bookings`, {
+-          headers: { 'Authorization': `Bearer ${token}` }
+-        });
+-        if (!res.ok) throw new Error('Fetch bookings failed');
+-        const bookings = await res.json();
+-
+-        if (bookings.length === 0) {
+-          bookingsContainer.innerHTML = '<p style="color: var(--text-muted);">You have no active bookings.</p>';
+-          return;
+-        }
+-
+-        bookingsContainer.innerHTML = '';
+-        bookings.forEach(booking => {
+-          const card = document.createElement('div');
+-          card.className = 'booking-card';
+-          
+-          let statusText = booking.status;
+-          let showCancelBtn = booking.status === 'active';
+-          
+-          card.innerHTML = `
+-            <div style="display: flex; justify-content: space-between; align-items: center;">
+-              <span style="font-size: 0.8rem; color: var(--text-muted);">ID: ${booking.id}</span>
+-              <span class="booking-status ${booking.status === 'active' ? 'status-active' : 'status-cancelled'}">
+-                ${statusText}
+-              </span>
+-            </div>
+-            
+-            <div style="font-size: 0.9rem;">
+-              <div>👥 Spots Reserved: <strong>${booking.seats_count}</strong></div>
+-              <div>🏄 Board Rentals: <strong>${booking.rental_count}</strong></div>
+-              <div>💰 Paid: <strong>${booking.price_total} ₽</strong></div>
+-              <div>📅 Created: ${new Date(booking.created_at).toLocaleString()}</div>
+-            </div>
+-
+-            ${showCancelBtn ? `
+-              <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+-                <button onclick="cancelBooking('${booking.id}')" class="btn-danger" style="padding: 0.4rem; font-size: 0.85rem;">
+-                  Cancel Booking
+-                </button>
+-              </div>
+-            ` : ''}
+-
+-            <!-- FeedBack / Rating system -->
+-            <div class="rating-form">
+-              <label>Rate Instructor for this trip:</label>
+-              <div class="stars-picker" data-booking-id="${booking.id}">
+-                <span data-val="1">★</span>
+-                <span data-val="2">★</span>
+-                <span data-val="3">★</span>
+-                <span data-val="4">★</span>
+-                <span data-val="5">★</span>
+-              </div>
+-              <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.25rem;">
+-                <input type="text" placeholder="Optional review comment..." id="comment-${booking.id}" style="padding: 0.35rem 0.5rem; font-size: 0.85rem;">
+-                <button onclick="submitRating('${booking.id}')" class="btn-secondary" style="width: auto; padding: 0.35rem 0.75rem; font-size: 0.85rem;">
+-                  Rate
+-                </button>
+-              </div>
+-            </div>
+-          `;
+-          bookingsContainer.appendChild(card);
+-
+-          // Setup stars picker listeners
+-          const stars = card.querySelectorAll('.stars-picker span');
+-          stars.forEach(star => {
+-            star.onclick = () => {
+-              const val = parseInt(star.getAttribute('data-val'));
+-              const siblings = star.parentNode.querySelectorAll('span');
+-              siblings.forEach(s => {
+-                const sVal = parseInt(s.getAttribute('data-val'));
+-                if (sVal <= val) s.classList.add('active');
+-                else s.classList.remove('active');
+-              });
+-              star.parentNode.setAttribute('data-selected-rating', val);
+-            };
+-          });
+-        });
+-      } catch (err) {
+-        bookingsContainer.innerHTML = '<p style="color: var(--error);">Error retrieving bookings.</p>';
+-      }
+-    }
+-
+-    // Booking actions
+-    window.openBookingModal = (slotId, routeName, startTime) => {
+-      if (!token) {
+-        showToast('Please login first to book a slot!', 'warning');
+-        return;
+-      }
+-      selectedSlotIdForBooking = slotId;
+-      modalRouteName.textContent = routeName;
+-      modalStartTime.textContent = new Date(startTime).toLocaleString();
+-      bookingOverlay.classList.add('active');
+-    };
+-
+-    cancelBookingModalBtn.onclick = () => {
+-      bookingOverlay.classList.remove('active');
+-      selectedSlotIdForBooking = null;
+-    };
+-
+-    confirmBookingBtn.onclick = async () => {
+-      if (!selectedSlotIdForBooking || !token) return;
+-      const seats = parseInt(seatsInput.value);
+-      const rentals = parseInt(rentalInput.value);
+-
+-      if (rentals > seats) {
+-        showToast('Rental boards cannot exceed number of booked spots!', 'error');
+-        return;
+-      }
+-
+-      try {
+-        const res = await fetch(`${API_BASE}/bookings`, {
+-          method: 'POST',
+-          headers: {
+-            'Content-Type': 'application/json',
+-            'Authorization': `Bearer ${token}`
+-          },
+-          body: JSON.stringify({
+-            slot_id: selectedSlotIdForBooking,
+-            seats_count: seats,
+-            rental_count: rentals
+-          })
+-        });
+-
+-        if (res.status === 201) {
+-          showToast('Booking created successfully!', 'success');
+-          bookingOverlay.classList.remove('active');
+-          loadSlots();
+-          loadBookings();
+-        } else if (res.status === 409) {
+-          const errData = await res.text();
+-          showToast(`Conflict: ${errData}`, 'error');
+-        } else {
+-          const errData = await res.text();
+-          showToast(`Error: ${errData}`, 'error');
+-        }
+-      } catch (err) {
+-        showToast('Failed to create booking', 'error');
+-      }
+-    };
+-
+-    // Cancel Booking Action
+-    window.cancelBooking = async (bookingId) => {
+-      if (!token) return;
+-      if (!confirm('Are you sure you want to cancel this booking?')) return;
+-
+-      try {
+-        const res = await fetch(`${API_BASE}/bookings/${bookingId}/cancel`, {
+-          method: 'POST',
+-          headers: { 'Authorization': `Bearer ${token}` }
+-        });
+-
+-        if (res.ok) {
+-          showToast('Booking cancelled successfully', 'success');
+-          loadSlots();
+-          loadBookings();
+-        } else if (res.status === 400) {
+-          const errData = await res.json();
+-          showToast(`⚠️ Cannot Cancel: ${errData.message}`, 'error');
+-        } else {
+-          showToast('Failed to cancel booking', 'error');
+-        }
+-      } catch (err) {
+-        showToast('Network error during cancellation', 'error');
+-      }
+-    };
+-
+-    // Submit Feedback / Instructor Rating Action
+-    window.submitRating = async (bookingId) => {
+-      if (!token) return;
+-      const picker = document.querySelector(`.stars-picker[data-booking-id="${bookingId}"]`);
+-      const ratingVal = picker.getAttribute('data-selected-rating');
+-      const commentInput = document.getElementById(`comment-${bookingId}`);
+-      const comment = commentInput.value.trim();
+-
+-      if (!ratingVal) {
+-        showToast('Please select a star rating (1 to 5) before submitting!', 'warning');
+-        return;
+-      }
+-
+-      try {
+-        const res = await fetch(`${API_BASE}/bookings/${bookingId}/rate`, {
+-          method: 'POST',
+-          headers: {
+-            'Content-Type': 'application/json',
+-            'Authorization': `Bearer ${token}`
+-          },
+-          body: JSON.stringify({
+-            rating: parseInt(ratingVal),
+-            comment: comment
+-          })
+-        });
+-
+-        if (res.ok) {
+-          showToast('Rating submitted successfully! Average rating recalculated.', 'success');
+-          commentInput.value = '';
+-          picker.removeAttribute('data-selected-rating');
+-          picker.querySelectorAll('span').forEach(s => s.classList.remove('active'));
+-          loadSlots();
+-          loadBookings();
+-        } else {
+-          showToast('Failed to submit rating', 'error');
+-        }
+-      } catch (err) {
+-        showToast('Network error while rating', 'error');
+-      }
+-    };
+-
+-    // Filter Listeners
+-    filterDateFrom.onchange = loadSlots;
+-    filterDateTo.onchange = loadSlots;
+-    refreshSlotsBtn.onclick = loadSlots;
+-
+-    // Initialization
+-    updateSessionUI();
+-    loadSlots();
+-    if (token) {
+-      loadBookings().catch(() => {
+-        token = '';
+-        localStorage.removeItem('volna_jwt');
+-        updateSessionUI();
+-      });
+-    }
+-  </script>
+-</body>
+-</html>
+diff --git a/cmd/api/main.go b/cmd/api/main.go
+index 9a0c0f9..1b324c9 100644
+--- a/cmd/api/main.go
++++ b/cmd/api/main.go
+@@ -9,10 +9,10 @@ import (
+ 	"syscall"
+ 	"time"
+ 
+-	"volna-backend/internal/api"
+-	"volna-backend/internal/config"
+-	"volna-backend/internal/repository"
+-	"volna-backend/pkg/auth"
++	"apex-backend/internal/api"
++	"apex-backend/internal/config"
++	"apex-backend/internal/repository"
++	"apex-backend/pkg/auth"
+ 
+ 	"github.com/go-chi/chi/v5"
+ 	"github.com/go-chi/chi/v5/middleware"
+@@ -25,7 +25,7 @@ func main() {
+ 	// Initialize Logger
+ 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+ 	slog.SetDefault(logger)
+-	logger.Info("Starting Volna API Server", slog.String("env", cfg.Env))
++	logger.Info("Starting Apex API Server", slog.String("env", cfg.Env))
+ 
+ 	// Router
+ 	r := chi.NewRouter()
+diff --git a/db_init.sql b/db_init.sql
+index e74b0df..1a18a85 100644
+--- a/db_init.sql
++++ b/db_init.sql
+@@ -1,213 +1,164 @@
+--- PostgreSQL Database Initialization Migration for "Volna" SUP-boarding Club
++-- PostgreSQL Database Initialization Migration for "Apex" Karting Center
++--
++-- NOTE: this schema was rewritten from scratch to match 01-analysis/api/openapi.yaml
++-- and 01-analysis/1-elicitation/domain-description.md — an earlier draft of this
++-- file was a verbatim copy of the reference "Volna" SUP-boarding-club schema
++-- (routes/lakes/rental boards) and did not describe this domain at all.
+ 
+--- Enable UUID generation extension
+ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+ 
+--- 1. Enums Creation
+-CREATE TYPE route_type AS ENUM ('novice', 'experienced');
+-CREATE TYPE slot_status AS ENUM ('scheduled', 'cancelled');
+-CREATE TYPE booking_status AS ENUM ('active', 'cancelled', 'late_cancel', 'club_cancelled');
++-- 1. Enums (names/values mirror openapi.yaml components.schemas exactly)
++CREATE TYPE track_config AS ENUM ('SHORT', 'LONG');
++CREATE TYPE gear_type AS ENUM ('OWN', 'RENTAL');
++CREATE TYPE slot_status AS ENUM ('SCHEDULED', 'CANCELLED_BY_WEATHER', 'COMPLETED');
++CREATE TYPE booking_status AS ENUM ('ACTIVE', 'CANCELLED_BY_CLIENT', 'CANCELLED_BY_CENTER', 'COMPLETED');
+ 
+ -- 2. Table: clients
+ CREATE TABLE clients (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     name VARCHAR(255) NOT NULL,
+     phone VARCHAR(20) UNIQUE NOT NULL,
+-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
++    is_regular BOOLEAN NOT NULL DEFAULT FALSE,
++    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ );
+ 
+--- 3. Table: routes
+-CREATE TABLE routes (
+-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-    name VARCHAR(255) NOT NULL,
+-    description TEXT,
+-    type route_type NOT NULL,
+-    capacity_cap INT NOT NULL,
+-    duration_min INT NOT NULL CHECK (duration_min > 0),
+-    geometry TEXT NOT NULL, -- Polyline coordinates or encoded polyline
+-    
+-    -- Constraint: Novice routes cap at 8, experienced cap at 12 (Domain Constraints)
+-    CONSTRAINT chk_route_capacity CHECK (
+-        (type = 'novice' AND capacity_cap <= 8) OR
+-        (type = 'experienced' AND capacity_cap <= 12)
+-    )
+-);
+-
+--- 4. Table: instructors
+-CREATE TABLE instructors (
++-- 3. Table: marshals (маршалы — provided by the center, not created via the client app)
++CREATE TABLE marshals (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     name VARCHAR(255) NOT NULL,
++    avatar_url TEXT NOT NULL DEFAULT '',
+     rating NUMERIC(3, 2) NOT NULL DEFAULT 5.00
+ );
+ 
+-
+--- 5. Table: slots
++-- 4. Table: slots
++-- Track config lives directly on the slot (R-015 / screen-registry.md) — there is
++-- no separate "routes" catalog in this domain, unlike the Volna reference project.
+ CREATE TABLE slots (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-    route_id UUID NOT NULL REFERENCES routes(id) ON DELETE RESTRICT,
+-    instructor_id UUID NOT NULL REFERENCES instructors(id) ON DELETE RESTRICT,
+-    start_at TIMESTAMP WITH TIME ZONE NOT NULL,
+-    total_seats INT NOT NULL,
+-    free_seats INT NOT NULL,
+-    free_rental_boards INT NOT NULL,
+-    price NUMERIC(10, 2) NOT NULL CHECK (price >= 0),
+-    rental_price NUMERIC(10, 2) NOT NULL CHECK (rental_price >= 0),
+-    meeting_point TEXT NOT NULL,
+-    meeting_point_lat DOUBLE PRECISION NOT NULL,
+-    meeting_point_lng DOUBLE PRECISION NOT NULL,
+-    status slot_status NOT NULL DEFAULT 'scheduled',
+-
+-    -- Constraints
+-    -- Max boards in club is 12 (Domain Constraint)
+-    CONSTRAINT chk_free_rental_boards CHECK (free_rental_boards >= 0 AND free_rental_boards <= 12),
+-    -- Seats must be non-negative and free seats cannot exceed total seats
+-    CONSTRAINT chk_seats_range CHECK (free_seats >= 0 AND free_seats <= total_seats),
+-    -- Slots total seats cannot exceed the club board limit (12 boards)
+-    CONSTRAINT chk_total_seats_limit CHECK (total_seats >= 1 AND total_seats <= 12)
++    marshal_id UUID NOT NULL REFERENCES marshals(id) ON DELETE RESTRICT,
++    start_time TIMESTAMPTZ NOT NULL,
++    track_config track_config NOT NULL,
++    max_karts INT NOT NULL CHECK (max_karts > 0 AND max_karts <= 14), -- BR: 14 karts max at Apex
++    available_karts INT NOT NULL,
++    rental_tariff INT NOT NULL CHECK (rental_tariff >= 0), -- RUB, gear rental price (R-015)
++    gathering_place TEXT NOT NULL,
++    status slot_status NOT NULL DEFAULT 'SCHEDULED',
++
++    CONSTRAINT chk_available_karts_range CHECK (available_karts >= 0 AND available_karts <= max_karts)
+ );
+ 
+--- 6. Table: bookings
++-- 5. Table: bookings
+ CREATE TABLE bookings (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     slot_id UUID NOT NULL REFERENCES slots(id) ON DELETE RESTRICT,
+     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+-    seats_count INT NOT NULL,
+-    rental_count INT NOT NULL,
+-    status booking_status NOT NULL DEFAULT 'active',
+-    price_total NUMERIC(10, 2) NOT NULL CHECK (price_total >= 0),
+-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+-    cancelled_at TIMESTAMP WITH TIME ZONE,
+-
+-    -- Business Rules Constraints
+-    -- A single booking can reserve 1 to 3 spots (US-5, R-013)
+-    CONSTRAINT chk_booking_seats_limit CHECK (seats_count >= 1 AND seats_count <= 3),
+-    -- Rental boards cannot exceed the number of booked seats
+-    CONSTRAINT chk_rental_boards_limit CHECK (rental_count >= 0 AND rental_count <= seats_count)
++    gear_type gear_type NOT NULL,
++    status booking_status NOT NULL DEFAULT 'ACTIVE',
++    cancellation_reason TEXT, -- set only when status = CANCELLED_BY_CENTER (openapi.yaml)
++    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    cancelled_at TIMESTAMPTZ
+ );
+ 
+--- 6b. Table: ratings
++-- 6. Table: ratings (one per booking — a completed ride can be rated once)
+ CREATE TABLE ratings (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     booking_id UUID UNIQUE NOT NULL REFERENCES bookings(id) ON DELETE RESTRICT,
+-    instructor_id UUID NOT NULL REFERENCES instructors(id) ON DELETE RESTRICT,
++    marshal_id UUID NOT NULL REFERENCES marshals(id) ON DELETE RESTRICT,
+     rating INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
+     comment TEXT,
+-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
++    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ );
+ 
++-- 7. Triggers enforcing BR-01 (atomic kart availability) and BR-02 (center cancellations)
+ 
+--- 7. Triggers to enforce complex domain invariants
+-
+--- A: Check that Slot's total_seats does not exceed the associated Route's capacity_cap
+-CREATE OR REPLACE FUNCTION check_slot_total_seats() 
++-- A: when a booking is created ACTIVE, atomically claim one kart on its slot.
++-- Raising an exception here is what makes "the last kart" conflict (409 in the
++-- API layer) safe under concurrent requests — the DB, not the application code,
++-- is the single source of truth for availability.
++CREATE OR REPLACE FUNCTION claim_kart_on_booking()
+ RETURNS TRIGGER AS $$
+ DECLARE
+-    max_cap INT;
++    remaining INT;
++    slot_state slot_status;
+ BEGIN
+-    SELECT capacity_cap INTO max_cap FROM routes WHERE id = NEW.route_id;
+-    IF NEW.total_seats > max_cap THEN
+-        RAISE EXCEPTION 'Slot total_seats (%) exceeds Route capacity_cap (%)', NEW.total_seats, max_cap;
++    IF NEW.status = 'ACTIVE' THEN
++        SELECT available_karts, status INTO remaining, slot_state
++        FROM slots WHERE id = NEW.slot_id FOR UPDATE;
++
++        IF slot_state IS DISTINCT FROM 'SCHEDULED' THEN
++            RAISE EXCEPTION 'SLOT_GONE: slot % is not open for booking', NEW.slot_id;
++        END IF;
++        IF remaining <= 0 THEN
++            RAISE EXCEPTION 'NO_KARTS_AVAILABLE: slot % has no free karts', NEW.slot_id;
++        END IF;
++
++        UPDATE slots SET available_karts = available_karts - 1 WHERE id = NEW.slot_id;
+     END IF;
+     RETURN NEW;
+ END;
+ $$ LANGUAGE plpgsql;
+ 
+-CREATE TRIGGER trg_check_slot_total_seats
+-BEFORE INSERT OR UPDATE OF total_seats, route_id ON slots
+-FOR EACH ROW EXECUTE FUNCTION check_slot_total_seats();
++CREATE TRIGGER trg_claim_kart_on_booking
++BEFORE INSERT ON bookings
++FOR EACH ROW EXECUTE FUNCTION claim_kart_on_booking();
+ 
+--- B: Auto-update free seats and boards on Slot when Booking is inserted/updated (Transaction integrity)
+-CREATE OR REPLACE FUNCTION update_slot_on_booking()
++-- B: releasing a kart when a client cancels in time (CANCELLED_BY_CLIENT).
++-- A center cancellation (CANCELLED_BY_CENTER) does not release a kart back into
++-- circulation on this slot — the whole slot is effectively dead once the center
++-- cancels it (BR-02) — so no availability change is made in that branch.
++CREATE OR REPLACE FUNCTION release_kart_on_cancel()
+ RETURNS TRIGGER AS $$
+ BEGIN
+-    -- Handle new active bookings
+-    IF (TG_OP = 'INSERT') THEN
+-        IF NEW.status = 'active' THEN
+-            -- Check if slot has enough seats and rental boards
+-            IF (SELECT free_seats FROM slots WHERE id = NEW.slot_id) < NEW.seats_count THEN
+-                RAISE EXCEPTION 'Not enough free seats on this slot';
+-            END IF;
+-            IF (SELECT free_rental_boards FROM slots WHERE id = NEW.slot_id) < NEW.rental_count THEN
+-                RAISE EXCEPTION 'Not enough free rental boards on this slot';
+-            END IF;
+-
+-            UPDATE slots 
+-            SET free_seats = free_seats - NEW.seats_count,
+-                free_rental_boards = free_rental_boards - NEW.rental_count
+-            WHERE id = NEW.slot_id;
+-        END IF;
+-    
+-    -- Handle changes to booking status (e.g., cancellations)
+-    ELSIF (TG_OP = 'UPDATE') THEN
+-        -- From active to cancelled (early cancellation) -> return seats and boards
+-        IF OLD.status = 'active' AND NEW.status = 'cancelled' THEN
+-            UPDATE slots 
+-            SET free_seats = free_seats + OLD.seats_count,
+-                free_rental_boards = free_rental_boards + OLD.rental_count
+-            WHERE id = OLD.slot_id;
+-        
+-        -- From active to late_cancel -> seats and boards are NOT returned (Domain constraint)
+-        ELSIF OLD.status = 'active' AND NEW.status = 'late_cancel' THEN
+-            -- No changes to slot availability (seats/boards are lost to other clients)
+-            NULL;
+-        
+-        -- From active to club_cancelled -> slot is cancelled, no need to update seats (slot is disabled anyway)
+-        ELSIF OLD.status = 'active' AND NEW.status = 'club_cancelled' THEN
+-            NULL;
+-        END IF;
++    IF OLD.status = 'ACTIVE' AND NEW.status = 'CANCELLED_BY_CLIENT' THEN
++        UPDATE slots SET available_karts = available_karts + 1 WHERE id = OLD.slot_id;
+     END IF;
+     RETURN NEW;
+ END;
+ $$ LANGUAGE plpgsql;
+ 
+-CREATE TRIGGER trg_update_slot_on_booking
+-AFTER INSERT OR UPDATE OF status ON bookings
+-FOR EACH ROW EXECUTE FUNCTION update_slot_on_booking();
++CREATE TRIGGER trg_release_kart_on_cancel
++AFTER UPDATE OF status ON bookings
++FOR EACH ROW EXECUTE FUNCTION release_kart_on_cancel();
+ 
+--- C: Auto-update average rating on Instructor when a new rating is inserted
+-CREATE OR REPLACE FUNCTION update_instructor_rating()
++-- C: keep marshal.rating as a running average of their ratings.
++CREATE OR REPLACE FUNCTION update_marshal_rating()
+ RETURNS TRIGGER AS $$
+ BEGIN
+-    UPDATE instructors
++    UPDATE marshals
+     SET rating = (
+         SELECT COALESCE(AVG(rating), 5.00)::NUMERIC(3,2)
+         FROM ratings
+-        WHERE instructor_id = NEW.instructor_id
++        WHERE marshal_id = NEW.marshal_id
+     )
+-    WHERE id = NEW.instructor_id;
++    WHERE id = NEW.marshal_id;
+     RETURN NEW;
+ END;
+ $$ LANGUAGE plpgsql;
+ 
+-CREATE TRIGGER trg_update_instructor_rating
++CREATE TRIGGER trg_update_marshal_rating
+ AFTER INSERT ON ratings
+-FOR EACH ROW EXECUTE FUNCTION update_instructor_rating();
++FOR EACH ROW EXECUTE FUNCTION update_marshal_rating();
+ 
+--- 8. Recommended Indexes for performance (Mobile App usage patterns)
+-CREATE INDEX idx_slots_start_at ON slots(start_at) WHERE status = 'scheduled';
++-- 8. Indexes
++CREATE INDEX idx_slots_start_time ON slots(start_time) WHERE status = 'SCHEDULED';
+ CREATE INDEX idx_bookings_client_id ON bookings(client_id);
+ CREATE INDEX idx_bookings_slot_id ON bookings(slot_id);
+ 
+--- 9. Seed Mock Data
+--- Seed Routes
+-INSERT INTO routes (id, name, description, type, capacity_cap, duration_min, geometry) VALUES
+-('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Озеро Кабан (Новичок)', 'Увлекательная прогулка по озеру Кабан для начинающих.', 'novice', 8, 60, 'encoded_geom_novice'),
+-('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', 'Голубые Озера (Профи)', 'Маршрут повышенной сложности для опытных сапбордистов.', 'experienced', 12, 90, 'encoded_geom_exp')
+-ON CONFLICT (id) DO NOTHING;
+-
+--- Seed Instructors
+-INSERT INTO instructors (id, name) VALUES
+-('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', 'Алексей'),
+-('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22', 'Данил'),
+-('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b33', 'Ирина')
++-- 9. Seed data — картинг-центр «Апекс» (see 01-analysis/0-customer-brief)
++INSERT INTO marshals (id, name, avatar_url, rating) VALUES
++('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', 'Игорь Соколов', '', 4.90),
++('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22', 'Дарья Волкова', '', 4.80),
++('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b33', 'Максим Орлов', '', 4.60),
++('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b44', 'Настя Кузнецова', '', 4.30),
++('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b55', 'Пётр Гринько', '', 4.70)
+ ON CONFLICT (id) DO NOTHING;
+ 
+--- Seed Slots (using dynamic dates so they are always in the upcoming week)
+-INSERT INTO slots (id, route_id, instructor_id, start_at, total_seats, free_seats, free_rental_boards, price, rental_price, meeting_point, meeting_point_lat, meeting_point_lng, status) VALUES
+-('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', NOW() + INTERVAL '1 day', 8, 8, 8, 1500.00, 500.00, 'Набережная озера Кабан', 55.7724, 49.1234, 'scheduled'),
+-('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c22', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22', NOW() + INTERVAL '2 days', 6, 6, 6, 1500.00, 500.00, 'Набережная озера Кабан', 55.7724, 49.1234, 'scheduled'),
+-('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c33', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b33', NOW() + INTERVAL '3 days', 10, 10, 10, 2500.00, 700.00, 'Вход на Голубые Озера', 55.9012, 49.1567, 'scheduled'),
+-('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c44', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', NOW() + INTERVAL '4 days', 12, 12, 12, 2500.00, 700.00, 'Вход на Голубые Озера', 55.9012, 49.1567, 'scheduled'),
+-('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c55', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22', NOW() + INTERVAL '5 days', 8, 8, 8, 1800.00, 500.00, 'Набережная озера Кабан', 55.7724, 49.1234, 'scheduled')
++-- Seed slots (dynamic dates so the schedule always shows a real upcoming week)
++INSERT INTO slots (id, marshal_id, start_time, track_config, max_karts, available_karts, rental_tariff, gathering_place, status) VALUES
++('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c11', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', NOW() + INTERVAL '3 hours', 'SHORT', 8, 5, 400, 'Картинг-центр «Апекс», стойка регистрации', 'SCHEDULED'),
++('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c22', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22', NOW() + INTERVAL '6 hours', 'LONG', 14, 1, 400, 'Картинг-центр «Апекс», стойка регистрации', 'SCHEDULED'),
++('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c33', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b33', NOW() + INTERVAL '9 hours', 'LONG', 14, 0, 450, 'Картинг-центр «Апекс», стойка регистрации', 'SCHEDULED'),
++('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c44', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b44', NOW() + INTERVAL '27 hours', 'SHORT', 8, 8, 400, 'Картинг-центр «Апекс», стойка регистрации', 'SCHEDULED'),
++('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c55', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b55', NOW() + INTERVAL '30 hours', 'LONG', 14, 6, 450, 'Картинг-центр «Апекс», стойка регистрации', 'CANCELLED_BY_WEATHER'),
++('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c66', 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b11', NOW() + INTERVAL '75 hours', 'SHORT', 8, 4, 400, 'Картинг-центр «Апекс», стойка регистрации', 'SCHEDULED')
+ ON CONFLICT (id) DO NOTHING;
+-
+diff --git a/docker-compose.yaml b/docker-compose.yaml
+index 62b1250..758f188 100644
+--- a/docker-compose.yaml
++++ b/docker-compose.yaml
+@@ -5,7 +5,7 @@ services:
+     environment:
+       POSTGRES_USER: postgres
+       POSTGRES_PASSWORD: postgres
+-      POSTGRES_DB: volna
++      POSTGRES_DB: apex
+     ports:
+       - "5432:5432"
+     volumes:
+@@ -25,7 +25,7 @@ services:
+     environment:
+       ENV: production
+       PORT: "8080"
+-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/volna?sslmode=disable
++      DATABASE_URL: postgres://postgres:postgres@postgres:5432/apex?sslmode=disable
+       JWT_SECRET: change-me-in-production
+     depends_on:
+       postgres:
+diff --git a/go.mod b/go.mod
+index a737cce..e55bcc6 100644
+--- a/go.mod
++++ b/go.mod
+@@ -1,4 +1,4 @@
+-module volna-backend
++module apex-backend
+ 
+ go 1.26.4
+ 
+diff --git a/internal/api/handler.go b/internal/api/handler.go
+index f1d0ae1..2fb8d85 100644
+--- a/internal/api/handler.go
++++ b/internal/api/handler.go
+@@ -4,15 +4,24 @@ import (
+ 	"encoding/json"
+ 	"net/http"
+ 	"strconv"
++	"strings"
+ 	"time"
+ 
+-	"volna-backend/internal/repository"
+-	"volna-backend/pkg/auth"
++	"apex-backend/internal/repository"
++	"apex-backend/pkg/auth"
+ 
+ 	"github.com/go-chi/chi/v5"
+ 	"github.com/jackc/pgx/v5/pgtype"
+ )
+ 
++// Cancellation cutoff. The customer brief (0-customer-brief/customer-brief.md)
++// only flags a same-day cancellation as "a problem" without giving an exact
++// number — see domain-description.md, open question #1. 60 minutes matches
++// the value used in 02-development/client's mock API (mockApi.ts,
++// CANCEL_CUTOFF_MINUTES) so both implementations agree until Denis confirms
++// the real threshold.
++const cancelCutoff = 60 * time.Minute
++
+ type Server struct {
+ 	repo repository.Querier
+ 	jwt  auth.TokenManager
+@@ -31,22 +40,33 @@ func (s *Server) Mount(r chi.Router) {
+ 	r.Get("/slots", s.GetSlots)
+ 	r.Get("/slots/{id}", s.GetSlotByID)
+ 
+-	r.Group(func(r chi.Router) {
++	r.Route("/client", func(r chi.Router) {
+ 		r.Post("/bookings", s.CreateBooking)
+ 		r.Get("/bookings", s.GetBookings)
+ 		r.Post("/bookings/{id}/cancel", s.CancelBooking)
+ 		r.Post("/bookings/{id}/rate", s.RateBooking)
++		r.Get("/profile", s.GetProfile)
+ 	})
+ }
+ 
+ // ---------- helpers ----------
+ 
++// ErrorResponse mirrors 01-analysis/api/openapi.yaml components.schemas.ErrorResponse.
++type ErrorResponse struct {
++	Code    string `json:"code"`
++	Message string `json:"message"`
++}
++
+ func respondJSON(w http.ResponseWriter, status int, v interface{}) {
+ 	w.Header().Set("Content-Type", "application/json")
+ 	w.WriteHeader(status)
+ 	json.NewEncoder(w).Encode(v)
+ }
+ 
++func respondError(w http.ResponseWriter, status int, code, message string) {
++	respondJSON(w, status, ErrorResponse{Code: code, Message: message})
++}
++
+ func (s *Server) extractClientID(r *http.Request) (pgtype.UUID, error) {
+ 	authHeader := r.Header.Get("Authorization")
+ 	if len(authHeader) < 8 {
+@@ -59,6 +79,21 @@ func parsePgtypeUUID(str string) (pgtype.UUID, error) {
+ 	return auth.ParseUUIDString(str)
+ }
+ 
++// bookingCreationErrorCode inspects the error raised by the claim_kart_on_booking
++// trigger (db_init.sql) and maps it to the HTTP status + error code the client
++// expects (see 01-analysis/api/openapi.yaml and FEAT-002-booking-flow.md).
++func bookingCreationErrorCode(err error) (status int, code string) {
++	msg := err.Error()
++	switch {
++	case strings.Contains(msg, "NO_KARTS_AVAILABLE"):
++		return http.StatusConflict, "NO_KARTS_AVAILABLE"
++	case strings.Contains(msg, "SLOT_GONE"):
++		return http.StatusGone, "SLOT_GONE"
++	default:
++		return http.StatusInternalServerError, "INTERNAL_ERROR"
++	}
++}
++
+ // ---------- request DTOs ----------
+ 
+ type SendCodeRequest struct {
+@@ -72,9 +107,8 @@ type LoginRequest struct {
+ }
+ 
+ type BookingRequest struct {
+-	SlotID      string `json:"slot_id"`
+-	SeatsCount  int32  `json:"seats_count"`
+-	RentalCount int32  `json:"rental_count"`
++	SlotID   string `json:"slot_id"`
++	GearType string `json:"gear_type"` // "OWN" | "RENTAL"
+ }
+ 
+ type RateBookingRequest struct {
+@@ -83,15 +117,20 @@ type RateBookingRequest struct {
+ }
+ 
+ // ---------- Auth handlers ----------
++// NOTE: authentication is not part of 01-analysis/api/openapi.yaml (the
++// client-app contract assumes an already-authenticated client, per R-004/R-028
++// in customer-brief.md). This flow exists as an additional backend exercise
++// for the "смежные роли" part of the assignment and is intentionally simple
++// (mock SMS code) — see root README.md for how this fits with 02-development.
+ 
+ func (s *Server) SendCode(w http.ResponseWriter, r *http.Request) {
+ 	var req SendCodeRequest
+ 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+-		http.Error(w, "Invalid request body", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
+ 		return
+ 	}
+ 	if req.Phone == "" {
+-		http.Error(w, "Phone is required", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "PHONE_REQUIRED", "Phone is required")
+ 		return
+ 	}
+ 	// MVP: mock SMS — code is always "0000"
+@@ -105,11 +144,11 @@ func (s *Server) SendCode(w http.ResponseWriter, r *http.Request) {
+ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
+ 	var req LoginRequest
+ 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+-		http.Error(w, "Invalid request body", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
+ 		return
+ 	}
+ 	if req.Code != "0000" {
+-		http.Error(w, "Invalid OTP code", http.StatusUnauthorized)
++		respondError(w, http.StatusUnauthorized, "INVALID_CODE", "Invalid OTP code")
+ 		return
+ 	}
+ 
+@@ -117,16 +156,15 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
+ 	client, err := s.repo.GetClientByPhone(ctx, req.Phone)
+ 	isNew := false
+ 	if err != nil {
+-		// Client not found → create
+ 		if req.Name == "" {
+-			req.Name = "User"
++			req.Name = "Клиент"
+ 		}
+ 		client, err = s.repo.CreateClient(ctx, repository.CreateClientParams{
+ 			Name:  req.Name,
+ 			Phone: req.Phone,
+ 		})
+ 		if err != nil {
+-			http.Error(w, "Failed to create client", http.StatusInternalServerError)
++			respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to create client")
+ 			return
+ 		}
+ 		isNew = true
+@@ -134,7 +172,7 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
+ 
+ 	token, err := s.jwt.GenerateToken(client.ID, 24*time.Hour)
+ 	if err != nil {
+-		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
++		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to generate token")
+ 		return
+ 	}
+ 
+@@ -151,18 +189,17 @@ func (s *Server) GetSlots(w http.ResponseWriter, r *http.Request) {
+ 	ctx := r.Context()
+ 	now := time.Now()
+ 
+-	startDate := pgtype.Timestamptz{Time: now, Valid: true}
+-	endDate := pgtype.Timestamptz{Time: now.AddDate(0, 0, 7), Valid: true}
++	startTime := pgtype.Timestamptz{Time: now, Valid: true}
++	endTime := pgtype.Timestamptz{Time: now.AddDate(0, 0, 7), Valid: true} // R-027: 7-day default horizon
+ 
+-	// Parse optional query params
+ 	if df := r.URL.Query().Get("date_from"); df != "" {
+-		if t, err := time.Parse("2006-01-02", df); err == nil {
+-			startDate = pgtype.Timestamptz{Time: t, Valid: true}
++		if t, err := time.Parse(time.RFC3339, df); err == nil {
++			startTime = pgtype.Timestamptz{Time: t, Valid: true}
+ 		}
+ 	}
+ 	if dt := r.URL.Query().Get("date_to"); dt != "" {
+-		if t, err := time.Parse("2006-01-02", dt); err == nil {
+-			endDate = pgtype.Timestamptz{Time: t.Add(24*time.Hour - time.Second), Valid: true}
++		if t, err := time.Parse(time.RFC3339, dt); err == nil {
++			endTime = pgtype.Timestamptz{Time: t, Valid: true}
+ 		}
+ 	}
+ 
+@@ -180,13 +217,13 @@ func (s *Server) GetSlots(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 
+ 	slots, err := s.repo.ListSlots(ctx, repository.ListSlotsParams{
+-		StartAt:   startDate,
+-		StartAt_2: endDate,
+-		Limit:     limit,
+-		Offset:    offset,
++		StartTime:   startTime,
++		StartTime_2: endTime,
++		Limit:       limit,
++		Offset:      offset,
+ 	})
+ 	if err != nil {
+-		http.Error(w, "Failed to fetch slots", http.StatusInternalServerError)
++		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to fetch slots")
+ 		return
+ 	}
+ 	if slots == nil {
+@@ -199,13 +236,13 @@ func (s *Server) GetSlotByID(w http.ResponseWriter, r *http.Request) {
+ 	idStr := chi.URLParam(r, "id")
+ 	slotID, err := parsePgtypeUUID(idStr)
+ 	if err != nil {
+-		http.Error(w, "Invalid slot ID", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_ID", "Invalid slot ID")
+ 		return
+ 	}
+ 
+ 	slot, err := s.repo.GetSlotByID(r.Context(), slotID)
+ 	if err != nil {
+-		http.Error(w, "Slot not found", http.StatusNotFound)
++		respondError(w, http.StatusNotFound, "NOT_FOUND", "Слот не найден")
+ 		return
+ 	}
+ 	respondJSON(w, http.StatusOK, slot)
+@@ -216,31 +253,36 @@ func (s *Server) GetSlotByID(w http.ResponseWriter, r *http.Request) {
+ func (s *Server) CreateBooking(w http.ResponseWriter, r *http.Request) {
+ 	clientID, err := s.extractClientID(r)
+ 	if err != nil {
+-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
++		respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+ 		return
+ 	}
+ 
+ 	var req BookingRequest
+ 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+-		http.Error(w, "Invalid request body", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
+ 		return
+ 	}
+ 
+ 	slotID, err := parsePgtypeUUID(req.SlotID)
+ 	if err != nil {
+-		http.Error(w, "Invalid slot_id", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_SLOT_ID", "Invalid slot_id")
++		return
++	}
++
++	gearType := repository.GearType(req.GearType)
++	if gearType != repository.GearTypeOwn && gearType != repository.GearTypeRental {
++		respondError(w, http.StatusBadRequest, "INVALID_GEAR_TYPE", "gear_type must be OWN or RENTAL")
+ 		return
+ 	}
+ 
+ 	booking, err := s.repo.CreateBooking(r.Context(), repository.CreateBookingParams{
+-		ClientID:    clientID,
+-		SlotID:      slotID,
+-		SeatsCount:  req.SeatsCount,
+-		RentalCount: req.RentalCount,
+-		PriceTotal:  pgtype.Numeric{Valid: false}, // calculated by DB trigger
++		ClientID: clientID,
++		SlotID:   slotID,
++		GearType: gearType,
+ 	})
+ 	if err != nil {
+-		http.Error(w, "Conflict: "+err.Error(), http.StatusConflict)
++		status, code := bookingCreationErrorCode(err)
++		respondError(w, status, code, "Не удалось создать бронирование")
+ 		return
+ 	}
+ 	respondJSON(w, http.StatusCreated, booking)
+@@ -249,7 +291,7 @@ func (s *Server) CreateBooking(w http.ResponseWriter, r *http.Request) {
+ func (s *Server) GetBookings(w http.ResponseWriter, r *http.Request) {
+ 	clientID, err := s.extractClientID(r)
+ 	if err != nil {
+-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
++		respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+ 		return
+ 	}
+ 
+@@ -272,7 +314,7 @@ func (s *Server) GetBookings(w http.ResponseWriter, r *http.Request) {
+ 		Offset:   offset,
+ 	})
+ 	if err != nil {
+-		http.Error(w, "Failed to fetch bookings", http.StatusInternalServerError)
++		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to fetch bookings")
+ 		return
+ 	}
+ 	if bookings == nil {
+@@ -284,45 +326,42 @@ func (s *Server) GetBookings(w http.ResponseWriter, r *http.Request) {
+ func (s *Server) CancelBooking(w http.ResponseWriter, r *http.Request) {
+ 	_, err := s.extractClientID(r)
+ 	if err != nil {
+-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
++		respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+ 		return
+ 	}
+ 
+ 	bookingIDStr := chi.URLParam(r, "id")
+ 	bookingID, err := parsePgtypeUUID(bookingIDStr)
+ 	if err != nil {
+-		http.Error(w, "Invalid booking ID", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_ID", "Invalid booking ID")
+ 		return
+ 	}
+ 
+ 	ctx := r.Context()
+ 	booking, err := s.repo.GetBookingByID(ctx, bookingID)
+ 	if err != nil {
+-		http.Error(w, "Booking not found", http.StatusNotFound)
++		respondError(w, http.StatusNotFound, "NOT_FOUND", "Бронирование не найдено")
+ 		return
+ 	}
+ 
+ 	slot, err := s.repo.GetSlotByID(ctx, booking.SlotID)
+ 	if err != nil {
+-		http.Error(w, "Failed to retrieve slot details", http.StatusInternalServerError)
++		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve slot details")
+ 		return
+ 	}
+ 
+-	// Enforce 2h cancellation window
+-	if time.Now().Add(2 * time.Hour).After(slot.StartAt.Time) {
+-		respondJSON(w, http.StatusBadRequest, map[string]string{
+-			"code":    "too_close",
+-			"message": "Cannot cancel booking less than 2 hours before the start time",
+-		})
++	if time.Now().Add(cancelCutoff).After(slot.StartTime.Time) {
++		respondError(w, http.StatusBadRequest, "CANCEL_TOO_LATE",
++			"Отмена невозможна менее чем за 60 минут до старта")
+ 		return
+ 	}
+ 
+ 	updated, err := s.repo.UpdateBookingStatus(ctx, repository.UpdateBookingStatusParams{
+ 		ID:     bookingID,
+-		Status: repository.BookingStatusCancelled,
++		Status: repository.BookingStatusCancelledByClient,
+ 	})
+ 	if err != nil {
+-		http.Error(w, "Failed to cancel booking: "+err.Error(), http.StatusInternalServerError)
++		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to cancel booking")
+ 		return
+ 	}
+ 	respondJSON(w, http.StatusOK, updated)
+@@ -331,37 +370,37 @@ func (s *Server) CancelBooking(w http.ResponseWriter, r *http.Request) {
+ func (s *Server) RateBooking(w http.ResponseWriter, r *http.Request) {
+ 	_, err := s.extractClientID(r)
+ 	if err != nil {
+-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
++		respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+ 		return
+ 	}
+ 
+ 	bookingIDStr := chi.URLParam(r, "id")
+ 	bookingID, err := parsePgtypeUUID(bookingIDStr)
+ 	if err != nil {
+-		http.Error(w, "Invalid booking ID", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_ID", "Invalid booking ID")
+ 		return
+ 	}
+ 
+ 	var req RateBookingRequest
+ 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+-		http.Error(w, "Invalid request body", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
+ 		return
+ 	}
+ 	if req.Rating < 1 || req.Rating > 5 {
+-		http.Error(w, "Rating must be between 1 and 5", http.StatusBadRequest)
++		respondError(w, http.StatusBadRequest, "INVALID_RATING", "Rating must be between 1 and 5")
+ 		return
+ 	}
+ 
+ 	ctx := r.Context()
+ 	booking, err := s.repo.GetBookingByID(ctx, bookingID)
+ 	if err != nil {
+-		http.Error(w, "Booking not found", http.StatusNotFound)
++		respondError(w, http.StatusNotFound, "NOT_FOUND", "Бронирование не найдено")
+ 		return
+ 	}
+ 
+ 	slot, err := s.repo.GetSlotByID(ctx, booking.SlotID)
+ 	if err != nil {
+-		http.Error(w, "Failed to retrieve slot details", http.StatusInternalServerError)
++		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve slot details")
+ 		return
+ 	}
+ 
+@@ -371,15 +410,38 @@ func (s *Server) RateBooking(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 
+ 	rating, err := s.repo.CreateRating(ctx, repository.CreateRatingParams{
+-		BookingID:    bookingID,
+-		InstructorID: slot.InstructorID,
+-		Rating:        req.Rating,
+-		Comment:      comment,
++		BookingID: bookingID,
++		MarshalID: slot.MarshalID,
++		Rating:    req.Rating,
++		Comment:   comment,
+ 	})
+ 	if err != nil {
+-		http.Error(w, "Failed to submit rating: "+err.Error(), http.StatusInternalServerError)
++		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to submit rating")
+ 		return
+ 	}
+ 
+ 	respondJSON(w, http.StatusCreated, rating)
+ }
++
++// ---------- Profile handler ----------
++
++func (s *Server) GetProfile(w http.ResponseWriter, r *http.Request) {
++	clientID, err := s.extractClientID(r)
++	if err != nil {
++		respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
++		return
++	}
++
++	client, err := s.repo.GetClientByID(r.Context(), clientID)
++	if err != nil {
++		respondError(w, http.StatusNotFound, "NOT_FOUND", "Профиль не найден")
++		return
++	}
++
++	respondJSON(w, http.StatusOK, map[string]interface{}{
++		"id":         client.ID,
++		"name":       client.Name,
++		"phone":      client.Phone,
++		"is_regular": client.IsRegular,
++	})
++}
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 4524938..d61485a 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -18,7 +18,7 @@ type ServerConfig struct {
+ }
+ 
+ type DatabaseConfig struct {
+-	URL string `env:"DATABASE_URL" env-default:"postgres://postgres:postgres@localhost:5432/volna?sslmode=disable"`
++	URL string `env:"DATABASE_URL" env-default:"postgres://postgres:postgres@localhost:5432/apex?sslmode=disable"`
+ }
+ 
+ type AuthConfig struct {
+diff --git a/internal/repository/models.go b/internal/repository/models.go
+index 87be7d0..5485559 100644
+--- a/internal/repository/models.go
++++ b/internal/repository/models.go
+@@ -14,10 +14,10 @@ import (
+ type BookingStatus string
+ 
+ const (
+-	BookingStatusActive        BookingStatus = "active"
+-	BookingStatusCancelled     BookingStatus = "cancelled"
+-	BookingStatusLateCancel    BookingStatus = "late_cancel"
+-	BookingStatusClubCancelled BookingStatus = "club_cancelled"
++	BookingStatusActive             BookingStatus = "ACTIVE"
++	BookingStatusCancelledByClient  BookingStatus = "CANCELLED_BY_CLIENT"
++	BookingStatusCancelledByCenter  BookingStatus = "CANCELLED_BY_CENTER"
++	BookingStatusCompleted          BookingStatus = "COMPLETED"
+ )
+ 
+ func (e *BookingStatus) Scan(src interface{}) error {
+@@ -34,10 +34,9 @@ func (e *BookingStatus) Scan(src interface{}) error {
+ 
+ type NullBookingStatus struct {
+ 	BookingStatus BookingStatus `json:"booking_status"`
+-	Valid         bool          `json:"valid"` // Valid is true if BookingStatus is not NULL
++	Valid         bool          `json:"valid"`
+ }
+ 
+-// Scan implements the Scanner interface.
+ func (ns *NullBookingStatus) Scan(value interface{}) error {
+ 	if value == nil {
+ 		ns.BookingStatus, ns.Valid = "", false
+@@ -47,7 +46,6 @@ func (ns *NullBookingStatus) Scan(value interface{}) error {
+ 	return ns.BookingStatus.Scan(value)
+ }
+ 
+-// Value implements the driver Valuer interface.
+ func (ns NullBookingStatus) Value() (driver.Value, error) {
+ 	if !ns.Valid {
+ 		return nil, nil
+@@ -55,53 +53,50 @@ func (ns NullBookingStatus) Value() (driver.Value, error) {
+ 	return string(ns.BookingStatus), nil
+ }
+ 
+-type RouteType string
++type GearType string
+ 
+ const (
+-	RouteTypeNovice      RouteType = "novice"
+-	RouteTypeExperienced RouteType = "experienced"
++	GearTypeOwn    GearType = "OWN"
++	GearTypeRental GearType = "RENTAL"
+ )
+ 
+-func (e *RouteType) Scan(src interface{}) error {
++func (e *GearType) Scan(src interface{}) error {
+ 	switch s := src.(type) {
+ 	case []byte:
+-		*e = RouteType(s)
++		*e = GearType(s)
+ 	case string:
+-		*e = RouteType(s)
++		*e = GearType(s)
+ 	default:
+-		return fmt.Errorf("unsupported scan type for RouteType: %T", src)
++		return fmt.Errorf("unsupported scan type for GearType: %T", src)
+ 	}
+ 	return nil
+ }
+ 
+-type NullRouteType struct {
+-	RouteType RouteType `json:"route_type"`
+-	Valid     bool      `json:"valid"` // Valid is true if RouteType is not NULL
+-}
++type TrackConfig string
+ 
+-// Scan implements the Scanner interface.
+-func (ns *NullRouteType) Scan(value interface{}) error {
+-	if value == nil {
+-		ns.RouteType, ns.Valid = "", false
+-		return nil
+-	}
+-	ns.Valid = true
+-	return ns.RouteType.Scan(value)
+-}
++const (
++	TrackConfigShort TrackConfig = "SHORT"
++	TrackConfigLong  TrackConfig = "LONG"
++)
+ 
+-// Value implements the driver Valuer interface.
+-func (ns NullRouteType) Value() (driver.Value, error) {
+-	if !ns.Valid {
+-		return nil, nil
++func (e *TrackConfig) Scan(src interface{}) error {
++	switch s := src.(type) {
++	case []byte:
++		*e = TrackConfig(s)
++	case string:
++		*e = TrackConfig(s)
++	default:
++		return fmt.Errorf("unsupported scan type for TrackConfig: %T", src)
+ 	}
+-	return string(ns.RouteType), nil
++	return nil
+ }
+ 
+ type SlotStatus string
+ 
+ const (
+-	SlotStatusScheduled SlotStatus = "scheduled"
+-	SlotStatusCancelled SlotStatus = "cancelled"
++	SlotStatusScheduled          SlotStatus = "SCHEDULED"
++	SlotStatusCancelledByWeather SlotStatus = "CANCELLED_BY_WEATHER"
++	SlotStatusCompleted          SlotStatus = "COMPLETED"
+ )
+ 
+ func (e *SlotStatus) Scan(src interface{}) error {
+@@ -116,85 +111,49 @@ func (e *SlotStatus) Scan(src interface{}) error {
+ 	return nil
+ }
+ 
+-type NullSlotStatus struct {
+-	SlotStatus SlotStatus `json:"slot_status"`
+-	Valid      bool       `json:"valid"` // Valid is true if SlotStatus is not NULL
+-}
+-
+-// Scan implements the Scanner interface.
+-func (ns *NullSlotStatus) Scan(value interface{}) error {
+-	if value == nil {
+-		ns.SlotStatus, ns.Valid = "", false
+-		return nil
+-	}
+-	ns.Valid = true
+-	return ns.SlotStatus.Scan(value)
+-}
+-
+-// Value implements the driver Valuer interface.
+-func (ns NullSlotStatus) Value() (driver.Value, error) {
+-	if !ns.Valid {
+-		return nil, nil
+-	}
+-	return string(ns.SlotStatus), nil
+-}
+-
+ type Booking struct {
+-	ID          pgtype.UUID        `json:"id"`
+-	SlotID      pgtype.UUID        `json:"slot_id"`
+-	ClientID    pgtype.UUID        `json:"client_id"`
+-	SeatsCount  int32              `json:"seats_count"`
+-	RentalCount int32              `json:"rental_count"`
+-	Status      BookingStatus      `json:"status"`
+-	PriceTotal  pgtype.Numeric     `json:"price_total"`
+-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+-	CancelledAt pgtype.Timestamptz `json:"cancelled_at"`
++	ID                  pgtype.UUID        `json:"id"`
++	SlotID              pgtype.UUID        `json:"slot_id"`
++	ClientID            pgtype.UUID        `json:"client_id"`
++	GearType            GearType           `json:"gear_type"`
++	Status              BookingStatus      `json:"status"`
++	CancellationReason  pgtype.Text        `json:"cancellation_reason"`
++	CreatedAt           pgtype.Timestamptz `json:"created_at"`
++	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
+ }
+ 
+ type Client struct {
+ 	ID        pgtype.UUID        `json:"id"`
+ 	Name      string             `json:"name"`
+ 	Phone     string             `json:"phone"`
++	IsRegular bool               `json:"is_regular"`
+ 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+ }
+ 
+-type Instructor struct {
+-	ID     pgtype.UUID    `json:"id"`
+-	Name   string         `json:"name"`
+-	Rating pgtype.Numeric `json:"rating"`
++type Marshal struct {
++	ID        pgtype.UUID    `json:"id"`
++	Name      string         `json:"name"`
++	AvatarUrl string         `json:"avatar_url"`
++	Rating    pgtype.Numeric `json:"rating"`
+ }
+ 
+ type Rating struct {
+-	ID           pgtype.UUID        `json:"id"`
+-	BookingID    pgtype.UUID        `json:"booking_id"`
+-	InstructorID pgtype.UUID        `json:"instructor_id"`
+-	Rating       int32              `json:"rating"`
+-	Comment      pgtype.Text        `json:"comment"`
+-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+-}
+-
+-type Route struct {
+-	ID          pgtype.UUID `json:"id"`
+-	Name        string      `json:"name"`
+-	Description pgtype.Text `json:"description"`
+-	Type        RouteType   `json:"type"`
+-	CapacityCap int32       `json:"capacity_cap"`
+-	DurationMin int32       `json:"duration_min"`
+-	Geometry    string      `json:"geometry"`
++	ID        pgtype.UUID        `json:"id"`
++	BookingID pgtype.UUID        `json:"booking_id"`
++	MarshalID pgtype.UUID        `json:"marshal_id"`
++	Rating    int32              `json:"rating"`
++	Comment   pgtype.Text        `json:"comment"`
++	CreatedAt pgtype.Timestamptz `json:"created_at"`
+ }
+ 
+ type Slot struct {
+-	ID               pgtype.UUID        `json:"id"`
+-	RouteID          pgtype.UUID        `json:"route_id"`
+-	InstructorID     pgtype.UUID        `json:"instructor_id"`
+-	StartAt          pgtype.Timestamptz `json:"start_at"`
+-	TotalSeats       int32              `json:"total_seats"`
+-	FreeSeats        int32              `json:"free_seats"`
+-	FreeRentalBoards int32              `json:"free_rental_boards"`
+-	Price            pgtype.Numeric     `json:"price"`
+-	RentalPrice      pgtype.Numeric     `json:"rental_price"`
+-	MeetingPoint     string             `json:"meeting_point"`
+-	MeetingPointLat  float64            `json:"meeting_point_lat"`
+-	MeetingPointLng  float64            `json:"meeting_point_lng"`
+-	Status           SlotStatus         `json:"status"`
++	ID              pgtype.UUID    `json:"id"`
++	MarshalID       pgtype.UUID    `json:"marshal_id"`
++	StartTime       pgtype.Timestamptz `json:"start_time"`
++	TrackConfig     TrackConfig    `json:"track_config"`
++	MaxKarts        int32          `json:"max_karts"`
++	AvailableKarts  int32          `json:"available_karts"`
++	RentalTariff    int32          `json:"rental_tariff"`
++	GatheringPlace  string         `json:"gathering_place"`
++	Status          SlotStatus     `json:"status"`
+ }
+diff --git a/internal/repository/query.sql b/internal/repository/query.sql
+index 9a4c253..1b0ae75 100644
+--- a/internal/repository/query.sql
++++ b/internal/repository/query.sql
+@@ -12,35 +12,35 @@ SELECT * FROM clients
+ WHERE id = $1 LIMIT 1;
+ 
+ -- name: ListSlots :many
+-SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
+-       s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
+-       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
+-       i.id as instructor_id, i.name as instructor_name
++SELECT s.id, s.start_time, s.track_config, s.max_karts, s.available_karts,
++       s.rental_tariff, s.gathering_place, s.status,
++       m.id AS marshal_id, m.name AS marshal_name, m.avatar_url AS marshal_avatar_url, m.rating AS marshal_rating
+ FROM slots s
+-JOIN routes r ON s.route_id = r.id
+-JOIN instructors i ON s.instructor_id = i.id
+-WHERE s.start_at >= $1 AND s.start_at <= $2
+-ORDER BY s.start_at ASC
++JOIN marshals m ON s.marshal_id = m.id
++WHERE s.start_time >= $1 AND s.start_time <= $2
++ORDER BY s.start_time ASC
+ LIMIT $3 OFFSET $4;
+ 
+ -- name: GetSlotByID :one
+-SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
+-       s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
+-       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
+-       i.id as instructor_id, i.name as instructor_name
++SELECT s.id, s.start_time, s.track_config, s.max_karts, s.available_karts,
++       s.rental_tariff, s.gathering_place, s.status,
++       m.id AS marshal_id, m.name AS marshal_name, m.avatar_url AS marshal_avatar_url, m.rating AS marshal_rating
+ FROM slots s
+-JOIN routes r ON s.route_id = r.id
+-JOIN instructors i ON s.instructor_id = i.id
++JOIN marshals m ON s.marshal_id = m.id
+ WHERE s.id = $1 LIMIT 1;
+ 
+ -- name: CreateBooking :one
+-INSERT INTO bookings (slot_id, client_id, seats_count, rental_count, price_total)
+-VALUES ($1, $2, $3, $4, $5)
++-- The claim_kart_on_booking trigger enforces BR-01 (atomic availability) and
++-- raises NO_KARTS_AVAILABLE / SLOT_GONE — the handler maps those to 409/410.
++INSERT INTO bookings (slot_id, client_id, gear_type)
++VALUES ($1, $2, $3)
+ RETURNING *;
+ 
+ -- name: UpdateBookingStatus :one
+ UPDATE bookings
+-SET status = $2, cancelled_at = CASE WHEN $2 = 'cancelled'::booking_status OR $2 = 'late_cancel'::booking_status THEN NOW() ELSE cancelled_at END
++SET status = $2,
++    cancellation_reason = COALESCE(sqlc.narg(cancellation_reason), cancellation_reason),
++    cancelled_at = CASE WHEN $2 IN ('CANCELLED_BY_CLIENT', 'CANCELLED_BY_CENTER') THEN NOW() ELSE cancelled_at END
+ WHERE id = $1
+ RETURNING *;
+ 
+@@ -52,10 +52,10 @@ WHERE id = $1 LIMIT 1;
+ SELECT b.* FROM bookings b
+ JOIN slots s ON b.slot_id = s.id
+ WHERE b.client_id = $1
+-ORDER BY s.start_at DESC
++ORDER BY s.start_time DESC
+ LIMIT $2 OFFSET $3;
+ 
+ -- name: CreateRating :one
+-INSERT INTO ratings (booking_id, instructor_id, rating, comment)
++INSERT INTO ratings (booking_id, marshal_id, rating, comment)
+ VALUES ($1, $2, $3, $4)
+ RETURNING *;
+diff --git a/internal/repository/query.sql.go b/internal/repository/query.sql.go
+index c1699c6..0511462 100644
+--- a/internal/repository/query.sql.go
++++ b/internal/repository/query.sql.go
+@@ -11,47 +11,12 @@ import (
+ 	"github.com/jackc/pgx/v5/pgtype"
+ )
+ 
+-const createBooking = `-- name: CreateBooking :one
+-INSERT INTO bookings (slot_id, client_id, seats_count, rental_count, price_total)
+-VALUES ($1, $2, $3, $4, $5)
+-RETURNING id, slot_id, client_id, seats_count, rental_count, status, price_total, created_at, cancelled_at
+-`
+-
+-type CreateBookingParams struct {
+-	SlotID      pgtype.UUID    `json:"slot_id"`
+-	ClientID    pgtype.UUID    `json:"client_id"`
+-	SeatsCount  int32          `json:"seats_count"`
+-	RentalCount int32          `json:"rental_count"`
+-	PriceTotal  pgtype.Numeric `json:"price_total"`
+-}
+-
+-func (q *Queries) CreateBooking(ctx context.Context, arg CreateBookingParams) (Booking, error) {
+-	row := q.db.QueryRow(ctx, createBooking,
+-		arg.SlotID,
+-		arg.ClientID,
+-		arg.SeatsCount,
+-		arg.RentalCount,
+-		arg.PriceTotal,
+-	)
+-	var i Booking
+-	err := row.Scan(
+-		&i.ID,
+-		&i.SlotID,
+-		&i.ClientID,
+-		&i.SeatsCount,
+-		&i.RentalCount,
+-		&i.Status,
+-		&i.PriceTotal,
+-		&i.CreatedAt,
+-		&i.CancelledAt,
+-	)
+-	return i, err
+-}
++// ---------- CreateClient ----------
+ 
+ const createClient = `-- name: CreateClient :one
+ INSERT INTO clients (name, phone)
+ VALUES ($1, $2)
+-RETURNING id, name, phone, created_at
++RETURNING id, name, phone, is_regular, created_at
+ `
+ 
+ type CreateClientParams struct {
+@@ -62,196 +27,86 @@ type CreateClientParams struct {
+ func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) (Client, error) {
+ 	row := q.db.QueryRow(ctx, createClient, arg.Name, arg.Phone)
+ 	var i Client
+-	err := row.Scan(
+-		&i.ID,
+-		&i.Name,
+-		&i.Phone,
+-		&i.CreatedAt,
+-	)
++	err := row.Scan(&i.ID, &i.Name, &i.Phone, &i.IsRegular, &i.CreatedAt)
+ 	return i, err
+ }
+ 
+-const createRating = `-- name: CreateRating :one
+-INSERT INTO ratings (booking_id, instructor_id, rating, comment)
+-VALUES ($1, $2, $3, $4)
+-RETURNING id, booking_id, instructor_id, rating, comment, created_at
+-`
+-
+-type CreateRatingParams struct {
+-	BookingID    pgtype.UUID `json:"booking_id"`
+-	InstructorID pgtype.UUID `json:"instructor_id"`
+-	Rating       int32       `json:"rating"`
+-	Comment      pgtype.Text `json:"comment"`
+-}
+-
+-func (q *Queries) CreateRating(ctx context.Context, arg CreateRatingParams) (Rating, error) {
+-	row := q.db.QueryRow(ctx, createRating,
+-		arg.BookingID,
+-		arg.InstructorID,
+-		arg.Rating,
+-		arg.Comment,
+-	)
+-	var i Rating
+-	err := row.Scan(
+-		&i.ID,
+-		&i.BookingID,
+-		&i.InstructorID,
+-		&i.Rating,
+-		&i.Comment,
+-		&i.CreatedAt,
+-	)
+-	return i, err
+-}
++// ---------- GetClientByPhone / GetClientByID ----------
+ 
+-const getBookingByID = `-- name: GetBookingByID :one
+-SELECT id, slot_id, client_id, seats_count, rental_count, status, price_total, created_at, cancelled_at FROM bookings
+-WHERE id = $1 LIMIT 1
++const getClientByPhone = `-- name: GetClientByPhone :one
++SELECT id, name, phone, is_regular, created_at FROM clients
++WHERE phone = $1 LIMIT 1
+ `
+ 
+-func (q *Queries) GetBookingByID(ctx context.Context, id pgtype.UUID) (Booking, error) {
+-	row := q.db.QueryRow(ctx, getBookingByID, id)
+-	var i Booking
+-	err := row.Scan(
+-		&i.ID,
+-		&i.SlotID,
+-		&i.ClientID,
+-		&i.SeatsCount,
+-		&i.RentalCount,
+-		&i.Status,
+-		&i.PriceTotal,
+-		&i.CreatedAt,
+-		&i.CancelledAt,
+-	)
++func (q *Queries) GetClientByPhone(ctx context.Context, phone string) (Client, error) {
++	row := q.db.QueryRow(ctx, getClientByPhone, phone)
++	var i Client
++	err := row.Scan(&i.ID, &i.Name, &i.Phone, &i.IsRegular, &i.CreatedAt)
+ 	return i, err
+ }
+ 
+ const getClientByID = `-- name: GetClientByID :one
+-SELECT id, name, phone, created_at FROM clients
++SELECT id, name, phone, is_regular, created_at FROM clients
+ WHERE id = $1 LIMIT 1
+ `
+ 
+ func (q *Queries) GetClientByID(ctx context.Context, id pgtype.UUID) (Client, error) {
+ 	row := q.db.QueryRow(ctx, getClientByID, id)
+ 	var i Client
+-	err := row.Scan(
+-		&i.ID,
+-		&i.Name,
+-		&i.Phone,
+-		&i.CreatedAt,
+-	)
++	err := row.Scan(&i.ID, &i.Name, &i.Phone, &i.IsRegular, &i.CreatedAt)
+ 	return i, err
+ }
+ 
+-const getClientByPhone = `-- name: GetClientByPhone :one
+-SELECT id, name, phone, created_at FROM clients
+-WHERE phone = $1 LIMIT 1
+-`
++// ---------- ListSlots / GetSlotByID ----------
++// Both return the slot joined with its marshal, matching the nested `Marshal`
++// object the client expects inside `Slot` per openapi.yaml.
+ 
+-func (q *Queries) GetClientByPhone(ctx context.Context, phone string) (Client, error) {
+-	row := q.db.QueryRow(ctx, getClientByPhone, phone)
+-	var i Client
+-	err := row.Scan(
+-		&i.ID,
+-		&i.Name,
+-		&i.Phone,
+-		&i.CreatedAt,
+-	)
+-	return i, err
++type ListSlotsParams struct {
++	StartTime   pgtype.Timestamptz `json:"start_time"`
++	StartTime_2 pgtype.Timestamptz `json:"start_time_2"`
++	Limit       int32              `json:"limit"`
++	Offset      int32              `json:"offset"`
+ }
+ 
+-const getSlotByID = `-- name: GetSlotByID :one
+-SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
+-       s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
+-       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
+-       i.id as instructor_id, i.name as instructor_name
+-FROM slots s
+-JOIN routes r ON s.route_id = r.id
+-JOIN instructors i ON s.instructor_id = i.id
+-WHERE s.id = $1 LIMIT 1
+-`
+-
+-type GetSlotByIDRow struct {
++type ListSlotsRow struct {
+ 	ID               pgtype.UUID        `json:"id"`
+-	StartAt          pgtype.Timestamptz `json:"start_at"`
+-	MaxSeats         int32              `json:"max_seats"`
+-	BookedSeats      int32              `json:"booked_seats"`
+-	FreeRentalBoards int32              `json:"free_rental_boards"`
+-	PricePerSeat     pgtype.Numeric     `json:"price_per_seat"`
+-	PriceRental      pgtype.Numeric     `json:"price_rental"`
+-	MeetingPoint     string             `json:"meeting_point"`
+-	MeetingPointLat  float64            `json:"meeting_point_lat"`
+-	MeetingPointLng  float64            `json:"meeting_point_lng"`
++	StartTime        pgtype.Timestamptz `json:"start_time"`
++	TrackConfig      TrackConfig        `json:"track_config"`
++	MaxKarts         int32              `json:"max_karts"`
++	AvailableKarts   int32              `json:"available_karts"`
++	RentalTariff     int32              `json:"rental_tariff"`
++	GatheringPlace   string             `json:"gathering_place"`
+ 	Status           SlotStatus         `json:"status"`
+-	RouteID          pgtype.UUID        `json:"route_id"`
+-	RouteName        string             `json:"route_name"`
+-	RouteDescription pgtype.Text        `json:"route_description"`
+-	RouteType        RouteType          `json:"route_type"`
+-	DurationMinutes  int32              `json:"duration_minutes"`
+-	RouteGeometry    string             `json:"route_geometry"`
+-	InstructorID     pgtype.UUID        `json:"instructor_id"`
+-	InstructorName   string             `json:"instructor_name"`
+-}
+-
+-func (q *Queries) GetSlotByID(ctx context.Context, id pgtype.UUID) (GetSlotByIDRow, error) {
+-	row := q.db.QueryRow(ctx, getSlotByID, id)
+-	var i GetSlotByIDRow
+-	err := row.Scan(
+-		&i.ID,
+-		&i.StartAt,
+-		&i.MaxSeats,
+-		&i.BookedSeats,
+-		&i.FreeRentalBoards,
+-		&i.PricePerSeat,
+-		&i.PriceRental,
+-		&i.MeetingPoint,
+-		&i.MeetingPointLat,
+-		&i.MeetingPointLng,
+-		&i.Status,
+-		&i.RouteID,
+-		&i.RouteName,
+-		&i.RouteDescription,
+-		&i.RouteType,
+-		&i.DurationMinutes,
+-		&i.RouteGeometry,
+-		&i.InstructorID,
+-		&i.InstructorName,
+-	)
+-	return i, err
++	MarshalID        pgtype.UUID        `json:"marshal_id"`
++	MarshalName      string             `json:"marshal_name"`
++	MarshalAvatarUrl string             `json:"marshal_avatar_url"`
++	MarshalRating    pgtype.Numeric     `json:"marshal_rating"`
+ }
+ 
+-const listBookingsByClient = `-- name: ListBookingsByClient :many
+-SELECT b.id, b.slot_id, b.client_id, b.seats_count, b.rental_count, b.status, b.price_total, b.created_at, b.cancelled_at FROM bookings b
+-JOIN slots s ON b.slot_id = s.id
+-WHERE b.client_id = $1
+-ORDER BY s.start_at DESC
+-LIMIT $2 OFFSET $3
++const listSlots = `-- name: ListSlots :many
++SELECT s.id, s.start_time, s.track_config, s.max_karts, s.available_karts,
++       s.rental_tariff, s.gathering_place, s.status,
++       m.id AS marshal_id, m.name AS marshal_name, m.avatar_url AS marshal_avatar_url, m.rating AS marshal_rating
++FROM slots s
++JOIN marshals m ON s.marshal_id = m.id
++WHERE s.start_time >= $1 AND s.start_time <= $2
++ORDER BY s.start_time ASC
++LIMIT $3 OFFSET $4
+ `
+ 
+-type ListBookingsByClientParams struct {
+-	ClientID pgtype.UUID `json:"client_id"`
+-	Limit    int32       `json:"limit"`
+-	Offset   int32       `json:"offset"`
+-}
+-
+-func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByClientParams) ([]Booking, error) {
+-	rows, err := q.db.Query(ctx, listBookingsByClient, arg.ClientID, arg.Limit, arg.Offset)
++func (q *Queries) ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlotsRow, error) {
++	rows, err := q.db.Query(ctx, listSlots, arg.StartTime, arg.StartTime_2, arg.Limit, arg.Offset)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 	defer rows.Close()
+-	var items []Booking
++	var items []ListSlotsRow
+ 	for rows.Next() {
+-		var i Booking
++		var i ListSlotsRow
+ 		if err := rows.Scan(
+-			&i.ID,
+-			&i.SlotID,
+-			&i.ClientID,
+-			&i.SeatsCount,
+-			&i.RentalCount,
+-			&i.Status,
+-			&i.PriceTotal,
+-			&i.CreatedAt,
+-			&i.CancelledAt,
++			&i.ID, &i.StartTime, &i.TrackConfig, &i.MaxKarts, &i.AvailableKarts,
++			&i.RentalTariff, &i.GatheringPlace, &i.Status,
++			&i.MarshalID, &i.MarshalName, &i.MarshalAvatarUrl, &i.MarshalRating,
+ 		); err != nil {
+ 			return nil, err
+ 		}
+@@ -263,82 +118,121 @@ func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByCl
+ 	return items, nil
+ }
+ 
+-const listSlots = `-- name: ListSlots :many
+-SELECT s.id, s.start_at, s.total_seats AS max_seats, (s.total_seats - s.free_seats) AS booked_seats, s.free_rental_boards, s.price AS price_per_seat, s.rental_price AS price_rental,
+-       s.meeting_point, s.meeting_point_lat, s.meeting_point_lng, s.status,
+-       r.id as route_id, r.name as route_name, r.description as route_description, r.type as route_type, r.duration_min as duration_minutes, r.geometry as route_geometry,
+-       i.id as instructor_id, i.name as instructor_name
++type GetSlotByIDRow = ListSlotsRow
++
++const getSlotByID = `-- name: GetSlotByID :one
++SELECT s.id, s.start_time, s.track_config, s.max_karts, s.available_karts,
++       s.rental_tariff, s.gathering_place, s.status,
++       m.id AS marshal_id, m.name AS marshal_name, m.avatar_url AS marshal_avatar_url, m.rating AS marshal_rating
+ FROM slots s
+-JOIN routes r ON s.route_id = r.id
+-JOIN instructors i ON s.instructor_id = i.id
+-WHERE s.start_at >= $1 AND s.start_at <= $2
+-ORDER BY s.start_at ASC
+-LIMIT $3 OFFSET $4
++JOIN marshals m ON s.marshal_id = m.id
++WHERE s.id = $1 LIMIT 1
+ `
+ 
+-type ListSlotsParams struct {
+-	StartAt   pgtype.Timestamptz `json:"start_at"`
+-	StartAt_2 pgtype.Timestamptz `json:"start_at_2"`
+-	Limit     int32              `json:"limit"`
+-	Offset    int32              `json:"offset"`
++func (q *Queries) GetSlotByID(ctx context.Context, id pgtype.UUID) (GetSlotByIDRow, error) {
++	row := q.db.QueryRow(ctx, getSlotByID, id)
++	var i GetSlotByIDRow
++	err := row.Scan(
++		&i.ID, &i.StartTime, &i.TrackConfig, &i.MaxKarts, &i.AvailableKarts,
++		&i.RentalTariff, &i.GatheringPlace, &i.Status,
++		&i.MarshalID, &i.MarshalName, &i.MarshalAvatarUrl, &i.MarshalRating,
++	)
++	return i, err
+ }
+ 
+-type ListSlotsRow struct {
+-	ID               pgtype.UUID        `json:"id"`
+-	StartAt          pgtype.Timestamptz `json:"start_at"`
+-	MaxSeats         int32              `json:"max_seats"`
+-	BookedSeats      int32              `json:"booked_seats"`
+-	FreeRentalBoards int32              `json:"free_rental_boards"`
+-	PricePerSeat     pgtype.Numeric     `json:"price_per_seat"`
+-	PriceRental      pgtype.Numeric     `json:"price_rental"`
+-	MeetingPoint     string             `json:"meeting_point"`
+-	MeetingPointLat  float64            `json:"meeting_point_lat"`
+-	MeetingPointLng  float64            `json:"meeting_point_lng"`
+-	Status           SlotStatus         `json:"status"`
+-	RouteID          pgtype.UUID        `json:"route_id"`
+-	RouteName        string             `json:"route_name"`
+-	RouteDescription pgtype.Text        `json:"route_description"`
+-	RouteType        RouteType          `json:"route_type"`
+-	DurationMinutes  int32              `json:"duration_minutes"`
+-	RouteGeometry    string             `json:"route_geometry"`
+-	InstructorID     pgtype.UUID        `json:"instructor_id"`
+-	InstructorName   string             `json:"instructor_name"`
++// ---------- Bookings ----------
++
++type CreateBookingParams struct {
++	SlotID   pgtype.UUID `json:"slot_id"`
++	ClientID pgtype.UUID `json:"client_id"`
++	GearType GearType    `json:"gear_type"`
+ }
+ 
+-func (q *Queries) ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlotsRow, error) {
+-	rows, err := q.db.Query(ctx, listSlots,
+-		arg.StartAt,
+-		arg.StartAt_2,
+-		arg.Limit,
+-		arg.Offset,
++const createBooking = `-- name: CreateBooking :one
++INSERT INTO bookings (slot_id, client_id, gear_type)
++VALUES ($1, $2, $3)
++RETURNING id, slot_id, client_id, gear_type, status, cancellation_reason, created_at, cancelled_at
++`
++
++// The claim_kart_on_booking trigger (see db_init.sql) enforces BR-01 and raises
++// a Postgres exception (NO_KARTS_AVAILABLE / SLOT_GONE) instead of silently
++// overselling — the handler maps those errors to 409/410.
++func (q *Queries) CreateBooking(ctx context.Context, arg CreateBookingParams) (Booking, error) {
++	row := q.db.QueryRow(ctx, createBooking, arg.SlotID, arg.ClientID, arg.GearType)
++	var i Booking
++	err := row.Scan(
++		&i.ID, &i.SlotID, &i.ClientID, &i.GearType, &i.Status,
++		&i.CancellationReason, &i.CreatedAt, &i.CancelledAt,
++	)
++	return i, err
++}
++
++type UpdateBookingStatusParams struct {
++	ID                 pgtype.UUID   `json:"id"`
++	Status             BookingStatus `json:"status"`
++	CancellationReason pgtype.Text   `json:"cancellation_reason"`
++}
++
++const updateBookingStatus = `-- name: UpdateBookingStatus :one
++UPDATE bookings
++SET status = $2,
++    cancellation_reason = COALESCE($3, cancellation_reason),
++    cancelled_at = CASE WHEN $2 IN ('CANCELLED_BY_CLIENT', 'CANCELLED_BY_CENTER') THEN NOW() ELSE cancelled_at END
++WHERE id = $1
++RETURNING id, slot_id, client_id, gear_type, status, cancellation_reason, created_at, cancelled_at
++`
++
++func (q *Queries) UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) (Booking, error) {
++	row := q.db.QueryRow(ctx, updateBookingStatus, arg.ID, arg.Status, arg.CancellationReason)
++	var i Booking
++	err := row.Scan(
++		&i.ID, &i.SlotID, &i.ClientID, &i.GearType, &i.Status,
++		&i.CancellationReason, &i.CreatedAt, &i.CancelledAt,
++	)
++	return i, err
++}
++
++const getBookingByID = `-- name: GetBookingByID :one
++SELECT id, slot_id, client_id, gear_type, status, cancellation_reason, created_at, cancelled_at FROM bookings
++WHERE id = $1 LIMIT 1
++`
++
++func (q *Queries) GetBookingByID(ctx context.Context, id pgtype.UUID) (Booking, error) {
++	row := q.db.QueryRow(ctx, getBookingByID, id)
++	var i Booking
++	err := row.Scan(
++		&i.ID, &i.SlotID, &i.ClientID, &i.GearType, &i.Status,
++		&i.CancellationReason, &i.CreatedAt, &i.CancelledAt,
+ 	)
++	return i, err
++}
++
++type ListBookingsByClientParams struct {
++	ClientID pgtype.UUID `json:"client_id"`
++	Limit    int32       `json:"limit"`
++	Offset   int32       `json:"offset"`
++}
++
++const listBookingsByClient = `-- name: ListBookingsByClient :many
++SELECT b.id, b.slot_id, b.client_id, b.gear_type, b.status, b.cancellation_reason, b.created_at, b.cancelled_at FROM bookings b
++JOIN slots s ON b.slot_id = s.id
++WHERE b.client_id = $1
++ORDER BY s.start_time DESC
++LIMIT $2 OFFSET $3
++`
++
++func (q *Queries) ListBookingsByClient(ctx context.Context, arg ListBookingsByClientParams) ([]Booking, error) {
++	rows, err := q.db.Query(ctx, listBookingsByClient, arg.ClientID, arg.Limit, arg.Offset)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 	defer rows.Close()
+-	var items []ListSlotsRow
++	var items []Booking
+ 	for rows.Next() {
+-		var i ListSlotsRow
++		var i Booking
+ 		if err := rows.Scan(
+-			&i.ID,
+-			&i.StartAt,
+-			&i.MaxSeats,
+-			&i.BookedSeats,
+-			&i.FreeRentalBoards,
+-			&i.PricePerSeat,
+-			&i.PriceRental,
+-			&i.MeetingPoint,
+-			&i.MeetingPointLat,
+-			&i.MeetingPointLng,
+-			&i.Status,
+-			&i.RouteID,
+-			&i.RouteName,
+-			&i.RouteDescription,
+-			&i.RouteType,
+-			&i.DurationMinutes,
+-			&i.RouteGeometry,
+-			&i.InstructorID,
+-			&i.InstructorName,
++			&i.ID, &i.SlotID, &i.ClientID, &i.GearType, &i.Status,
++			&i.CancellationReason, &i.CreatedAt, &i.CancelledAt,
+ 		); err != nil {
+ 			return nil, err
+ 		}
+@@ -350,31 +244,24 @@ func (q *Queries) ListSlots(ctx context.Context, arg ListSlotsParams) ([]ListSlo
+ 	return items, nil
+ }
+ 
+-const updateBookingStatus = `-- name: UpdateBookingStatus :one
+-UPDATE bookings
+-SET status = $2, cancelled_at = CASE WHEN $2 = 'cancelled'::booking_status OR $2 = 'late_cancel'::booking_status THEN NOW() ELSE cancelled_at END
+-WHERE id = $1
+-RETURNING id, slot_id, client_id, seats_count, rental_count, status, price_total, created_at, cancelled_at
+-`
++// ---------- Ratings ----------
+ 
+-type UpdateBookingStatusParams struct {
+-	ID     pgtype.UUID   `json:"id"`
+-	Status BookingStatus `json:"status"`
++type CreateRatingParams struct {
++	BookingID pgtype.UUID `json:"booking_id"`
++	MarshalID pgtype.UUID `json:"marshal_id"`
++	Rating    int32       `json:"rating"`
++	Comment   pgtype.Text `json:"comment"`
+ }
+ 
+-func (q *Queries) UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) (Booking, error) {
+-	row := q.db.QueryRow(ctx, updateBookingStatus, arg.ID, arg.Status)
+-	var i Booking
+-	err := row.Scan(
+-		&i.ID,
+-		&i.SlotID,
+-		&i.ClientID,
+-		&i.SeatsCount,
+-		&i.RentalCount,
+-		&i.Status,
+-		&i.PriceTotal,
+-		&i.CreatedAt,
+-		&i.CancelledAt,
+-	)
++const createRating = `-- name: CreateRating :one
++INSERT INTO ratings (booking_id, marshal_id, rating, comment)
++VALUES ($1, $2, $3, $4)
++RETURNING id, booking_id, marshal_id, rating, comment, created_at
++`
++
++func (q *Queries) CreateRating(ctx context.Context, arg CreateRatingParams) (Rating, error) {
++	row := q.db.QueryRow(ctx, createRating, arg.BookingID, arg.MarshalID, arg.Rating, arg.Comment)
++	var i Rating
++	err := row.Scan(&i.ID, &i.BookingID, &i.MarshalID, &i.Rating, &i.Comment, &i.CreatedAt)
+ 	return i, err
+ }
+diff --git a/mobile_app/lib/core/constants/api_constants.dart b/mobile_app/lib/core/constants/api_constants.dart
+index 7d216a5..2707f34 100644
+--- a/mobile_app/lib/core/constants/api_constants.dart
++++ b/mobile_app/lib/core/constants/api_constants.dart
+@@ -1,4 +1,4 @@
+-/// API endpoint constants for the Volna backend.
++/// API endpoint constants for the Apex backend.
+ class ApiConstants {
+   ApiConstants._();
+ 
+@@ -14,9 +14,11 @@ class ApiConstants {
+   static const String slots = '/slots';
+   static String slotById(String id) => '/slots/$id';
+ 
+-  // ── Bookings ──
+-  static const String bookings = '/bookings';
+-  static String cancelBooking(String id) => '/bookings/$id/cancel';
++  // ── Bookings (client-scoped, matches 01-analysis/api/openapi.yaml) ──
++  static const String bookings = '/client/bookings';
++  static String cancelBooking(String id) => '/client/bookings/$id/cancel';
++  static String rateBooking(String id) => '/client/bookings/$id/rate';
++  static const String profile = '/client/profile';
+ 
+   // ── Health ──
+   static const String health = '/health';
+diff --git a/mobile_app/lib/data/datasources/bookings_remote_datasource.dart b/mobile_app/lib/data/datasources/bookings_remote_datasource.dart
+index 1c07cd3..249f79e 100644
+--- a/mobile_app/lib/data/datasources/bookings_remote_datasource.dart
++++ b/mobile_app/lib/data/datasources/bookings_remote_datasource.dart
+@@ -9,7 +9,7 @@ class BookingsRemoteDatasource {
+ 
+   BookingsRemoteDatasource(this._dio);
+ 
+-  /// POST /bookings — создать бронирование.
++  /// POST /client/bookings — создать бронирование.
+   Future<BookingModel> createBooking(CreateBookingRequest request) async {
+     final response = await _dio.post(
+       ApiConstants.bookings,
+@@ -18,7 +18,7 @@ class BookingsRemoteDatasource {
+     return BookingModel.fromJson(response.data as Map<String, dynamic>);
+   }
+ 
+-  /// GET /bookings — список бронирований текущего клиента.
++  /// GET /client/bookings — список бронирований текущего клиента.
+   Future<List<BookingModel>> getBookings({
+     int limit = 50,
+     int offset = 0,
+diff --git a/mobile_app/lib/data/models/booking_model.dart b/mobile_app/lib/data/models/booking_model.dart
+index 4f5054d..47ace2c 100644
+--- a/mobile_app/lib/data/models/booking_model.dart
++++ b/mobile_app/lib/data/models/booking_model.dart
+@@ -1,56 +1,48 @@
+-/// Модель бронирования (из GET /bookings).
++import 'slot_model.dart';
++
++/// Модель бронирования (из GET /client/bookings).
++/// Поля 1:1 с components.schemas.Booking в 01-analysis/api/openapi.yaml.
+ class BookingModel {
+   final String id;
+-  final String clientId;
+-  final String slotId;
+-  final int seatsCount;
+-  final int rentalCount;
+-  final String priceTotal;
+-  final String status; // confirmed, cancelled
+-  final String? createdAt;
++  final SlotModel slot;
++  final String status; // ACTIVE | CANCELLED_BY_CLIENT | CANCELLED_BY_CENTER | COMPLETED
++  final String gearType; // OWN | RENTAL
++  final String? cancellationReason; // present only if status == CANCELLED_BY_CENTER
+ 
+   const BookingModel({
+     required this.id,
+-    required this.clientId,
+-    required this.slotId,
+-    required this.seatsCount,
+-    required this.rentalCount,
+-    required this.priceTotal,
++    required this.slot,
+     required this.status,
+-    this.createdAt,
++    required this.gearType,
++    this.cancellationReason,
+   });
+ 
+-  bool get isCancelled => status == 'cancelled';
++  bool get isActive => status == 'ACTIVE';
++  bool get isCancelledByCenter => status == 'CANCELLED_BY_CENTER';
+ 
+   factory BookingModel.fromJson(Map<String, dynamic> json) {
+     return BookingModel(
+       id: json['id'] as String? ?? '',
+-      clientId: json['client_id'] as String? ?? '',
+-      slotId: json['slot_id'] as String? ?? '',
+-      seatsCount: json['seats_count'] as int? ?? 0,
+-      rentalCount: json['rental_count'] as int? ?? 0,
+-      priceTotal: json['price_total'] as String? ?? '0',
+-      status: json['status'] as String? ?? '',
+-      createdAt: json['created_at'] as String?,
++      slot: SlotModel.fromJson(json['slot'] as Map<String, dynamic>? ?? const {}),
++      status: json['status'] as String? ?? 'ACTIVE',
++      gearType: json['gear_type'] as String? ?? 'OWN',
++      cancellationReason: json['cancellation_reason'] as String?,
+     );
+   }
+ }
+ 
+-/// Запрос на создание бронирования.
++/// Запрос на создание бронирования — POST /client/bookings.
+ class CreateBookingRequest {
+   final String slotId;
+-  final int seatsCount;
+-  final int rentalCount;
++  final String gearType; // OWN | RENTAL
+ 
+   const CreateBookingRequest({
+     required this.slotId,
+-    required this.seatsCount,
+-    this.rentalCount = 0,
++    required this.gearType,
+   });
+ 
+   Map<String, dynamic> toJson() => {
+         'slot_id': slotId,
+-        'seats_count': seatsCount,
+-        'rental_count': rentalCount,
++        'gear_type': gearType,
+       };
+ }
+diff --git a/mobile_app/lib/data/models/slot_model.dart b/mobile_app/lib/data/models/slot_model.dart
+index b2839cf..16839aa 100644
+--- a/mobile_app/lib/data/models/slot_model.dart
++++ b/mobile_app/lib/data/models/slot_model.dart
+@@ -1,41 +1,68 @@
+-/// Модель слота прогулки (из GET /slots, GET /slots/{id}).
++/// Модель маршала (из вложенного объекта Slot.marshal).
++class MarshalModel {
++  final String id;
++  final String name;
++  final String avatarUrl;
++  final double rating;
++
++  const MarshalModel({
++    required this.id,
++    required this.name,
++    required this.avatarUrl,
++    required this.rating,
++  });
++
++  factory MarshalModel.fromJson(Map<String, dynamic> json) {
++    return MarshalModel(
++      id: json['id'] as String? ?? '',
++      name: json['name'] as String? ?? '',
++      avatarUrl: json['avatar_url'] as String? ?? '',
++      rating: (json['rating'] as num?)?.toDouble() ?? 5.0,
++    );
++  }
++}
++
++/// Модель слота заезда (из GET /slots, GET /slots/{id}).
++/// Поля 1:1 с components.schemas.Slot в 01-analysis/api/openapi.yaml.
+ class SlotModel {
+   final String id;
+-  final String routeName;
+-  final String? routeDescription;
+-  final DateTime startAt;
+-  final int durationMinutes;
+-  final int maxSeats;
+-  final int bookedSeats;
+-  final String pricePerSeat;
+-  final String? priceRental;
++  final DateTime startTime;
++  final String trackConfig; // "SHORT" | "LONG"
++  final MarshalModel marshal;
++  final int availableKarts;
++  final int maxKarts;
++  final String status; // "SCHEDULED" | "CANCELLED_BY_WEATHER" | "COMPLETED"
++  final int rentalTariff;
++  final String gatheringPlace;
+ 
+   const SlotModel({
+     required this.id,
+-    required this.routeName,
+-    this.routeDescription,
+-    required this.startAt,
+-    required this.durationMinutes,
+-    required this.maxSeats,
+-    required this.bookedSeats,
+-    required this.pricePerSeat,
+-    this.priceRental,
++    required this.startTime,
++    required this.trackConfig,
++    required this.marshal,
++    required this.availableKarts,
++    required this.maxKarts,
++    required this.status,
++    required this.rentalTariff,
++    required this.gatheringPlace,
+   });
+ 
+-  int get availableSeats => maxSeats - bookedSeats;
+-  bool get isFull => availableSeats <= 0;
++  bool get isFull => availableKarts <= 0;
++  bool get isBookable => status == 'SCHEDULED' && !isFull;
+ 
+   factory SlotModel.fromJson(Map<String, dynamic> json) {
+     return SlotModel(
+       id: json['id'] as String? ?? '',
+-      routeName: json['route_name'] as String? ?? '',
+-      routeDescription: json['route_description'] as String?,
+-      startAt: DateTime.parse(json['start_at'] as String),
+-      durationMinutes: json['duration_minutes'] as int? ?? 0,
+-      maxSeats: json['max_seats'] as int? ?? 0,
+-      bookedSeats: json['booked_seats'] as int? ?? 0,
+-      pricePerSeat: json['price_per_seat'] as String? ?? '0',
+-      priceRental: json['price_rental'] as String?,
++      startTime: DateTime.parse(json['start_time'] as String),
++      trackConfig: json['track_config'] as String? ?? 'SHORT',
++      marshal: MarshalModel.fromJson(
++        json['marshal'] as Map<String, dynamic>? ?? const {},
++      ),
++      availableKarts: json['available_karts'] as int? ?? 0,
++      maxKarts: json['max_karts'] as int? ?? 0,
++      status: json['status'] as String? ?? 'SCHEDULED',
++      rentalTariff: json['rental_tariff'] as int? ?? 0,
++      gatheringPlace: json['gathering_place'] as String? ?? '',
+     );
+   }
+ }
+diff --git a/mobile_app/lib/data/repositories/bookings_repository.dart b/mobile_app/lib/data/repositories/bookings_repository.dart
+index 35a3095..7eb0181 100644
+--- a/mobile_app/lib/data/repositories/bookings_repository.dart
++++ b/mobile_app/lib/data/repositories/bookings_repository.dart
+@@ -12,15 +12,13 @@ class BookingsRepository {
+   /// Создать бронирование.
+   Future<BookingModel> createBooking({
+     required String slotId,
+-    required int seatsCount,
+-    int rentalCount = 0,
++    required String gearType,
+   }) async {
+     try {
+       return await _datasource.createBooking(
+         CreateBookingRequest(
+           slotId: slotId,
+-          seatsCount: seatsCount,
+-          rentalCount: rentalCount,
++          gearType: gearType,
+         ),
+       );
+     } on DioException catch (e) {
+@@ -59,7 +57,9 @@ class BookingsRepository {
+       case 401:
+         return Exception('Необходимо войти заново');
+       case 409:
+-        return Exception('Конфликт: ${e.response?.data}');
++        return Exception('Места на этот заезд закончились');
++      case 410:
++        return Exception('Заезд больше недоступен для записи');
+       default:
+         return Exception('Не удалось выполнить операцию');
+     }
+diff --git a/mobile_app/lib/data/repositories/slots_repository.dart b/mobile_app/lib/data/repositories/slots_repository.dart
+index bc9b696..c645d4f 100644
+--- a/mobile_app/lib/data/repositories/slots_repository.dart
++++ b/mobile_app/lib/data/repositories/slots_repository.dart
+@@ -43,8 +43,8 @@ class SlotsRepository {
+       return Exception('Нет соединения. Проверьте интернет.');
+     }
+     if (e.response?.statusCode == 404) {
+-      return Exception('Прогулка не найдена');
++      return Exception('Заезд не найден');
+     }
+-    return Exception('Не удалось загрузить прогулки');
++    return Exception('Не удалось загрузить расписание заездов');
+   }
+ }
+diff --git a/mobile_app/lib/presentation/theme/app_theme.dart b/mobile_app/lib/presentation/theme/app_theme.dart
+index 1259382..aa529e6 100644
+--- a/mobile_app/lib/presentation/theme/app_theme.dart
++++ b/mobile_app/lib/presentation/theme/app_theme.dart
+@@ -1,8 +1,8 @@
+ import 'package:flutter/material.dart';
+ 
+-/// Design tokens for the Volna app.
++/// Design tokens for the Apex app.
+ class AppTheme {
+-  // Colors — ocean-inspired palette
++  // Colors — high-contrast racing-inspired palette
+   static const Color primary = Color(0xFF0A6EBD);
+   static const Color primaryDark = Color(0xFF074B82);
+   static const Color accent = Color(0xFF12B886);
+diff --git a/mobile_app/pubspec.yaml b/mobile_app/pubspec.yaml
+index 3639539..03dee07 100644
+--- a/mobile_app/pubspec.yaml
++++ b/mobile_app/pubspec.yaml
+@@ -1,5 +1,5 @@
+-name: volna_mobile
+-description: "Volna SUP-Boarding Booking App"
++name: apex_mobile
++description: "Apex Karting Center Booking App"
+ publish_to: 'none'
+ 
+ version: 1.0.0+1

@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: volna
+      POSTGRES_DB: apex
     ports:
       - "5432:5432"
     volumes:
@@ -25,7 +25,7 @@ services:
     environment:
       ENV: production
       PORT: "8080"
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/volna?sslmode=disable
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/apex?sslmode=disable
       JWT_SECRET: change-me-in-production
     depends_on:
       postgres:

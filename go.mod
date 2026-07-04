@@ -1,4 +1,4 @@
-module volna-backend
+module apex-backend
 
 go 1.26.4
 
